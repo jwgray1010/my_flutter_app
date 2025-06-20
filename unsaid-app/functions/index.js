@@ -1,11 +1,17 @@
-import functions from "firebase-functions";
+import functions from "firebase-functions/v2/https";
+import express from "express";
 import OpenAI from "openai";
+import 'dotenv/config';
+
+const app = express();
 
 const openai = new OpenAI({
-  apiKey: functions.config().openai.key,
+  apiKey: "sk-...your-key-here...",
 });
 
-export const analyzeTone = functions.https.onRequest(async (req, res) => {
+app.use(express.json());
+
+app.post('/analyzeTone', async (req, res) => {
   const { message, sensitivity, tone } = req.body;
 
   const prompt = `
@@ -27,11 +33,11 @@ Return all three clearly labeled.
       model: "gpt-4",
       messages: [{ role: "user", content: prompt }],
     });
-
-    const output = completion.choices[0].message.content;
-    res.status(200).send({ result: output });
+    res.status(200).send({ result: completion.choices[0].message.content });
   } catch (error) {
     res.status(500).send({ error: error.message });
   }
 });
+
+export const analyzeTone = functions.onRequest(app);
 

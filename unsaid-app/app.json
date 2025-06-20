@@ -1,0 +1,8 @@
+{
+  "ios": {
+    "bundleIdentifier": "com.anonymous.welcome-view-content-sample"
+  },
+  "android": {
+    "package": "com.anonymous.welcomeviewcontentsample"
+  }
+}

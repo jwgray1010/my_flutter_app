@@ -16,6 +16,7 @@ import ShareProfileScreen from '../screens/ShareProfileScreen';
 import ToneFilterScreen from '../screens/ToneFilterScreen';
 import PremiumScreen from '../screens/PremiumScreen';
 import KeyboardIntroScreen from '../screens/KeyboardIntroScreen';
+import AnalyzeToneScreen from '../screens/AnalyzeToneScreen';
 import colors from './theme/colors';
 
 const Stack = createStackNavigator();
@@ -51,6 +52,7 @@ const TabNavigator = () => {
       <Stack.Screen name="ToneFilter" component={ToneFilterScreen} />
       <Stack.Screen name="Premium" component={PremiumScreen} />
       <Stack.Screen name="KeyboardIntro" component={KeyboardIntroScreen} />
+      <Stack.Screen name="AnalyzeTone" component={AnalyzeToneScreen} />
     </Stack.Navigator>
   );
 };

@@ -29,7 +29,10 @@ export default function SplashScreen() {
         style={[styles.logo, { transform: [{ scale: scaleAnim }] }]}
         resizeMode="contain"
       />
-      <Image source={require('../assets/logo-icon.PNG')} style={{ width: 48, height: 48, alignSelf: 'center', marginBottom: 16 }} />
+      <Image
+        source={require('../assets/logo-icon.PNG')}
+        style={{ width: 48, height: 48, alignSelf: 'center', marginBottom: 16 }}
+      />
     </View>
   );
 }

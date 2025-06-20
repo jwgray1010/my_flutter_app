@@ -83,7 +83,7 @@ export default function ExplainProfileScreen({ route, navigation }) {
         accessibilityLabel="Unsaid logo"
       />
       <Text style={styles.title} accessibilityRole="header">
-        🧠 Relationship Snapshot
+        Relationship Snapshot
       </Text>
       <Text
         style={styles.partnerName}

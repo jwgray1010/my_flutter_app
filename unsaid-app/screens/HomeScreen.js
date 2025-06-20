@@ -153,7 +153,7 @@ export default function HomeScreen({ navigation }) {
           accessibilityRole="button"
           accessibilityLabel="Go to Relationship Profile. View and edit compatibility insights."
         >
-          <Text style={styles.cardTitle}>❤️ Relationship Profile</Text>
+          <Text style={styles.cardTitle}> Relationship Profile</Text>
           <Text style={styles.cardText}>View and edit compatibility insights</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -314,7 +314,7 @@ export default function HomeScreen({ navigation }) {
         accessibilityRole="button"
         accessibilityLabel="Go to Partner Relationship Type"
       >
-        <Text style={styles.partnerButtonText}>❤️ Partner Relationship Type</Text>
+        <Text style={styles.partnerButtonText}> Partner Relationship Type</Text>
       </TouchableOpacity>
     </View>
   );

@@ -1,4 +1,4 @@
-// App.js
+import React from 'react';
 import { NavigationContainer, DefaultTheme, useNavigationContainerRef } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import SplashScreen from './screens/SplashScreen';
@@ -15,10 +15,11 @@ import RelationshipProfileScreen from './screens/RelationshipProfileScreen';
 import { MessageSettingsProvider } from './context/MessageSettingsContext';
 import PartnerDisclaimerScreen from './screens/PartnerDisclaimerScreen';
 import colors from './theme/colors';
-import MainTabs from './navigation/MainTabs'; // Import MainTabs
+import MainTabs from './navigation/MainTabs';
 import Providers from './Providers';
 import { StatusBar } from 'react-native';
 import analytics from '@react-native-firebase/analytics';
+import AnalyzeToneScreen from './screens/AnalyzeToneScreen';
 
 const Stack = createStackNavigator();
 
@@ -75,11 +76,11 @@ export default function App() {
           <Stack.Screen name="Premium" component={PremiumScreen} />
           <Stack.Screen name="KeyboardIntro" component={KeyboardIntroScreen} />
           <Stack.Screen name="Home" component={HomeTabNavigator} />
-          <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} /> {/* Add MainTabs screen */}
-          {/* Partner/Relationship flow, accessible from HomeTabNavigator */}
+          <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
           <Stack.Screen name="PartnerDisclaimer" component={PartnerDisclaimerScreen} />
           <Stack.Screen name="RelationshipQuestionnaire" component={RelationshipQuestionnaireScreen} />
           <Stack.Screen name="RelationshipProfile" component={RelationshipProfileScreen} />
+          <Stack.Screen name="AnalyzeTone" component={AnalyzeToneScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </Providers>

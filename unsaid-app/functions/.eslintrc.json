@@ -23,19 +23,5 @@
         "allowTemplateLiterals": true
       }
     ]
-  },
-  "overrides": [
-    {
-      "files": [
-        "**/*.spec.*"
-      ],
-      "env": {
-        "mocha": true
-      },
-      "rules": { }
-    }
-  ],
-  "globals": {
-    "process": "readonly"
   }
 }
