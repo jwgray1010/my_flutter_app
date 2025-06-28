@@ -36,4 +36,11 @@ workflows:
     publishing:
       email:
         recipients:
-          - your@email.com
+          - john.gray@usd286.org
+    files:
+      - my_flutter_app/android/**
+      - my_flutter_app/ios/**
+      - my_flutter_app/lib/**
+      - my_flutter_app/assets/**
+      - my_flutter_app/pubspec.yaml
+      - my_flutter_app/codemagic.yaml
