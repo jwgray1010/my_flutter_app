@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "829982637762",
+    "project_id": "unsaid-3bc7c",
+    "storage_bucket": "unsaid-3bc7c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:829982637762:android:007a8d124cdde5b531c55b",
+        "android_client_info": {
+          "package_name": "com.unsaid.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "829982637762-9c9q0s71l6b4423vrord20kqbt265995.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDPeGY69Y7xnEHbg290wQ1GmmD2P8qdNNU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "829982637762-9c9q0s71l6b4423vrord20kqbt265995.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

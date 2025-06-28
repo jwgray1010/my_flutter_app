@@ -1,0 +1,39 @@
+workflows:
+  flutter-app:
+    name: Flutter Build & Test
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      # Do NOT put secrets here; add OPENAI_API_KEY in Codemagic UI
+    scripts:
+      - name: Generate .env file from environment variables
+        script: |
+          echo "OPENAI_API_KEY=$OPENAI_API_KEY" > assets/.env
+      - name: Install dependencies
+        script: |
+          flutter pub get
+      - name: Run analyzer
+        script: |
+          flutter analyze
+      - name: Run tests
+        script: |
+          flutter test --no-pub
+      - name: Build APK
+        script: |
+          flutter build apk --release
+      - name: Build iOS
+        script: |
+          flutter build ios --release --no-codesign
+    artifacts:
+      - build/**/outputs/**/*.apk
+      - build/ios/iphoneos/*.app
+      - build/**/outputs/**/*.aab
+      - build/**/app/outputs/**/*.apk
+      - build/**/app/outputs/**/*.aab
+      - build/web/**
+    publishing:
+      email:
+        recipients:
+          - your@email.com
