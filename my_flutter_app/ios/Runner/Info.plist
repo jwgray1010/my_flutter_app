@@ -51,6 +51,12 @@
 	<string>This app needs access to photo library to select profile pictures.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>This app needs access to microphone for voice features.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>This app uses your local network so the phone remote can control rehearsal playback on iPad.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_choirrehearsal._tcp</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
