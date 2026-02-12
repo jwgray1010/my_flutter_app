@@ -7,6 +7,7 @@ import 'models.dart';
 import 'networking.dart';
 import 'rehearsal_controller.dart';
 import 'voice_commands.dart';
+import 'voice_help_screen.dart';
 import 'voice_ptt_service.dart';
 
 class ChoirRehearsalApp extends StatelessWidget {
@@ -222,6 +223,17 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
           appBar: AppBar(
             title: const Text('Main Player'),
             actions: [
+              IconButton(
+                tooltip: 'Voice commands help',
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const VoiceCommandsHelpScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.help_outline),
+              ),
               if (_isPttListening || _isPttProcessing)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
@@ -294,6 +306,7 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                   tempoPercent: playback.tempoPercent,
                   loopA: playback.loopA,
                   loopB: playback.loopB,
+                  loopArmed: _controller.playbackController.loopArmed,
                   isPlaying: playback.isPlaying,
                 ),
                 const SizedBox(height: 12),
@@ -550,7 +563,7 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
       parserText,
       rehearsalMarks: rehearsalMarks,
     );
-    if (!parsed.isSuccess || parsed.action == null) {
+    if (!parsed.isSuccess || parsed.intent == null) {
       _showVoiceToast(
         success: false,
         message: parsed.message,
@@ -559,103 +572,34 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
       return;
     }
 
-    final appliedMessage = await _applyMainVoiceAction(parsed.action!);
+    final commandResult = await _applyMainVoiceIntent(parsed.intent!);
+    if (!commandResult.applied) {
+      _showVoiceToast(
+        success: false,
+        message: commandResult.message,
+        suggestion: commandResult.suggestion,
+      );
+      return;
+    }
     _showVoiceToast(
       success: true,
-      message: appliedMessage ?? parsed.message,
+      message: commandResult.message.isNotEmpty ? commandResult.message : parsed.message,
       suggestion: null,
     );
   }
 
-  Future<String?> _applyMainVoiceAction(VoiceAction action) async {
-    switch (action.type) {
-      case VoiceActionType.play:
-        await _controller.play();
-        return 'Play';
-      case VoiceActionType.pause:
-        _controller.pause();
-        return 'Pause';
-      case VoiceActionType.jumpToMeasure:
-        final measure = action.measure;
-        if (measure == null) {
-          return null;
-        }
-        _controller.jumpToMeasure(measure);
-        return 'Jump to measure $measure';
-      case VoiceActionType.jumpRelative:
-        final delta = action.deltaMeasures;
-        if (delta == null) {
-          return null;
-        }
-        _controller.jumpByMeasures(delta);
-        return delta < 0 ? 'Back ${delta.abs()}' : 'Forward $delta';
-      case VoiceActionType.setTempoPercent:
-        final percent = action.tempoPercent;
-        if (percent == null) {
-          return null;
-        }
-        _controller.setTempoPercent(percent);
-        return 'Tempo ${percent.toStringAsFixed(0)}%';
-      case VoiceActionType.tempoFaster:
-        _controller.increaseTempo();
-        return 'Tempo faster';
-      case VoiceActionType.tempoSlower:
-        _controller.decreaseTempo();
-        return 'Tempo slower';
-      case VoiceActionType.loopToggle:
-        final playback = _controller.playback;
-        if (playback.loopA == null) {
-          _controller.setLoopAAtCurrentMeasure();
-          return 'Set loop A';
-        }
-        if (playback.loopB == null) {
-          _controller.setLoopBAtCurrentMeasure();
-          return 'Set loop B';
-        }
-        _controller.clearLoop();
-        return 'Clear loop';
-      case VoiceActionType.setLoopA:
-        _controller.setLoopAAtCurrentMeasure();
-        return 'Set loop A';
-      case VoiceActionType.setLoopB:
-        _controller.setLoopBAtCurrentMeasure();
-        return 'Set loop B';
-      case VoiceActionType.clearLoop:
-        _controller.clearLoop();
-        return 'Clear loop';
-      case VoiceActionType.setLoopRange:
-        final start = action.loopStartMeasure;
-        final end = action.loopEndMeasure;
-        if (start == null || end == null) {
-          return null;
-        }
-        _controller.jumpToMeasure(start);
-        _controller.playback.setLoopA(start);
-        _controller.playback.setLoopB(end);
-        return 'Loop measures $start to $end';
-      case VoiceActionType.setAllParts:
-        _controller.enableAllParts();
-        return 'All parts on';
-      case VoiceActionType.setPartEnabled:
-        final part = action.part;
-        final enabled = action.enabled;
-        if (part == null || enabled == null) {
-          return null;
-        }
-        _controller.setPartEnabled(part, enabled);
-        return '${part.shortLabel} ${enabled ? 'on' : 'off'}';
-      case VoiceActionType.setExactParts:
-        final parts = action.parts;
-        if (parts == null) {
-          return null;
-        }
-        _controller.setEnabledParts(parts);
-        final labels = parts.map((part) => part.shortLabel).join(' + ');
-        return 'Parts: $labels';
-      case VoiceActionType.playStartingPitches:
-        await _controller.playStartingPitches();
-        return 'Play starting pitches';
+  Future<CommandExecutionResult> _applyMainVoiceIntent(VoiceIntent intent) async {
+    final command = intentToCommand(
+      intent,
+      currentMeasure: _controller.playback.currentMeasure,
+    );
+    if (command == null) {
+      return const CommandExecutionResult(
+        applied: false,
+        message: "Didn't catch that.",
+      );
     }
+    return _controller.applyCommand(command);
   }
 
   void _showVoiceToast({
@@ -862,6 +806,7 @@ class _CurrentStatusCard extends StatelessWidget {
     required this.tempoPercent,
     required this.loopA,
     required this.loopB,
+    required this.loopArmed,
     required this.isPlaying,
   });
 
@@ -869,6 +814,7 @@ class _CurrentStatusCard extends StatelessWidget {
   final double tempoPercent;
   final int? loopA;
   final int? loopB;
+  final bool loopArmed;
   final bool isPlaying;
 
   @override
@@ -899,6 +845,13 @@ class _CurrentStatusCard extends StatelessWidget {
             Text(
               'Loop ${loopA?.toString() ?? '-'} -> ${loopB?.toString() ?? '-'}',
               style: const TextStyle(fontSize: 22),
+            ),
+            Text(
+              loopArmed ? 'Loop Armed' : 'Loop Disarmed',
+              style: TextStyle(
+                fontSize: 20,
+                color: loopArmed ? Colors.greenAccent : Colors.white60,
+              ),
             ),
           ],
         ),
@@ -1009,6 +962,17 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
             appBar: AppBar(
               title: const Text('Phone Remote'),
               actions: [
+                IconButton(
+                  tooltip: 'Voice commands help',
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const VoiceCommandsHelpScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.help_outline),
+                ),
                 if (_isPttListening || _isPttProcessing)
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
@@ -1257,7 +1221,7 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
       parserText,
       rehearsalMarks: state.rehearsalMarks,
     );
-    if (!parsed.isSuccess || parsed.action == null) {
+    if (!parsed.isSuccess || parsed.intent == null) {
       _showVoiceToast(
         success: false,
         message: parsed.message,
@@ -1266,126 +1230,103 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
       return;
     }
 
-    final appliedMessage = _applyRemoteVoiceAction(parsed.action!, state);
+    final appliedMessage = _applyRemoteVoiceIntent(parsed.intent!, state);
+    if (appliedMessage == null) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try: 'play' or 'measure 32'.",
+      );
+      return;
+    }
     _showVoiceToast(
       success: true,
-      message: appliedMessage ?? parsed.message,
+      message: appliedMessage,
       suggestion: null,
     );
   }
 
-  String? _applyRemoteVoiceAction(VoiceAction action, RemoteState state) {
-    switch (action.type) {
-      case VoiceActionType.play:
-        _client.sendCommand({'type': 'PLAY'});
+  String? _applyRemoteVoiceIntent(VoiceIntent intent, RemoteState state) {
+    final command = intentToCommand(intent, currentMeasure: state.currentMeasure);
+    if (command == null) {
+      return null;
+    }
+
+    if (command['type'] == 'JUMP_TO_MEASURE') {
+      final rawMeasure = _parseInt(command['measure']);
+      if (rawMeasure != null && state.measures.isNotEmpty) {
+        final clamped = _clampToKnownMeasure(rawMeasure, state.measures);
+        command['measure'] = clamped;
+        _client.sendCommand(command);
+        if (rawMeasure != clamped) {
+          return 'Clamped to m.$clamped';
+        }
+        return 'Jump to measure $clamped';
+      }
+    }
+
+    _client.sendCommand(command);
+    return _describeRemoteCommand(command, state);
+  }
+
+  int _clampToKnownMeasure(int requested, List<int> measures) {
+    if (measures.isEmpty) {
+      return requested;
+    }
+    if (measures.contains(requested)) {
+      return requested;
+    }
+    var closest = measures.first;
+    var distance = (closest - requested).abs();
+    for (final measure in measures) {
+      final candidate = (measure - requested).abs();
+      if (candidate < distance) {
+        closest = measure;
+        distance = candidate;
+      }
+    }
+    return closest;
+  }
+
+  String _describeRemoteCommand(Map<String, dynamic> command, RemoteState state) {
+    switch (command['type']) {
+      case 'PLAY':
         return 'Play';
-      case VoiceActionType.pause:
-        _client.sendCommand({'type': 'PAUSE'});
+      case 'PAUSE':
         return 'Pause';
-      case VoiceActionType.jumpToMeasure:
-        final measure = action.measure;
-        if (measure == null) {
-          return null;
-        }
-        _client.sendCommand({'type': 'JUMP_TO_MEASURE', 'measure': measure});
-        return 'Jump to measure $measure';
-      case VoiceActionType.jumpRelative:
-        final delta = action.deltaMeasures;
-        if (delta == null) {
-          return null;
-        }
-        _client.sendCommand({'type': 'JUMP_RELATIVE', 'deltaMeasures': delta});
+      case 'JUMP_TO_MEASURE':
+        return 'Jump to measure ${command['measure']}';
+      case 'JUMP_RELATIVE':
+        final delta = _parseInt(command['deltaMeasures']) ?? 0;
         return delta < 0 ? 'Back ${delta.abs()}' : 'Forward $delta';
-      case VoiceActionType.setTempoPercent:
-        final percent = action.tempoPercent;
-        if (percent == null) {
-          return null;
-        }
-        _client.sendCommand({'type': 'SET_TEMPO', 'percent': percent});
-        return 'Tempo ${percent.toStringAsFixed(0)}%';
-      case VoiceActionType.tempoFaster:
-        _client.sendCommand({
-          'type': 'SET_TEMPO',
-          'percent': (state.tempoPercent + 5).clamp(50, 100),
-        });
-        return 'Tempo faster';
-      case VoiceActionType.tempoSlower:
-        _client.sendCommand({
-          'type': 'SET_TEMPO',
-          'percent': (state.tempoPercent - 5).clamp(50, 100),
-        });
-        return 'Tempo slower';
-      case VoiceActionType.loopToggle:
-        if (state.loopA == null) {
-          _client.sendCommand({
-            'type': 'SET_LOOP_A',
-            'measure': state.currentMeasure,
-          });
-          return 'Set loop A';
-        }
-        if (state.loopB == null) {
-          _client.sendCommand({
-            'type': 'SET_LOOP_B',
-            'measure': state.currentMeasure,
-          });
-          return 'Set loop B';
-        }
-        _client.sendCommand({'type': 'CLEAR_LOOP'});
-        return 'Clear loop';
-      case VoiceActionType.setLoopA:
-        _client.sendCommand({
-          'type': 'SET_LOOP_A',
-          'measure': state.currentMeasure,
-        });
+      case 'SET_TEMPO':
+        return 'Tempo ${(_parseDouble(command['percent']) ?? state.tempoPercent).round()}%';
+      case 'SET_TEMPO_ADJUST':
+        final delta = _parseInt(command['delta']) ?? 0;
+        return delta < 0 ? 'Tempo slower' : 'Tempo faster';
+      case 'SET_LOOP_A':
         return 'Set loop A';
-      case VoiceActionType.setLoopB:
-        _client.sendCommand({
-          'type': 'SET_LOOP_B',
-          'measure': state.currentMeasure,
-        });
+      case 'SET_LOOP_B':
         return 'Set loop B';
-      case VoiceActionType.clearLoop:
-        _client.sendCommand({'type': 'CLEAR_LOOP'});
+      case 'SET_LOOP_RANGE':
+        return 'Loop measures ${command['a']} to ${command['b']}';
+      case 'LOOP_ARM_TOGGLE':
+        return state.loopArmed ? 'Loop disarmed' : 'Loop armed';
+      case 'CLEAR_LOOP':
         return 'Clear loop';
-      case VoiceActionType.setLoopRange:
-        final start = action.loopStartMeasure;
-        final end = action.loopEndMeasure;
-        if (start == null || end == null) {
-          return null;
+      case 'SET_MIX_PRESET':
+        if (command['preset'] == 'all') {
+          return 'All parts on';
         }
-        _client.sendCommand({'type': 'JUMP_TO_MEASURE', 'measure': start});
-        _client.sendCommand({'type': 'SET_LOOP_A', 'measure': start});
-        _client.sendCommand({'type': 'SET_LOOP_B', 'measure': end});
-        return 'Loop measures $start to $end';
-      case VoiceActionType.setAllParts:
-        _client.sendCommand({'type': 'SET_ALL_PARTS'});
-        return 'All parts on';
-      case VoiceActionType.setPartEnabled:
-        final part = action.part;
-        final enabled = action.enabled;
-        if (part == null || enabled == null) {
-          return null;
-        }
-        _client.sendCommand({
-          'type': 'SET_PART_ENABLED',
-          'part': part.id,
-          'enabled': enabled,
-        });
-        return '${part.shortLabel} ${enabled ? 'on' : 'off'}';
-      case VoiceActionType.setExactParts:
-        final parts = action.parts;
-        if (parts == null) {
-          return null;
-        }
-        _client.sendCommand({
-          'type': 'SET_PARTS_EXACT',
-          'parts': parts.map((part) => part.id).toList(),
-        });
-        final labels = parts.map((part) => part.shortLabel).join(' + ');
-        return 'Parts: $labels';
-      case VoiceActionType.playStartingPitches:
-        _client.sendCommand({'type': 'PLAY_STARTING_PITCHES'});
+        return 'Parts updated';
+      case 'SET_PART_ENABLED':
+        final part = command['part']?.toString() ?? '';
+        final enabled = command['enabled'] == true;
+        return '$part ${enabled ? 'on' : 'off'}';
+      case 'PLAY_STARTING_PITCHES':
         return 'Play starting pitches';
+      default:
+        return 'Command sent';
     }
   }
 
@@ -1694,6 +1635,7 @@ class RemoteState {
     required this.currentMeasure,
     required this.loopA,
     required this.loopB,
+    required this.loopArmed,
     required this.enabledPartIds,
     required this.measures,
     required this.rehearsalMarks,
@@ -1705,6 +1647,7 @@ class RemoteState {
   final int currentMeasure;
   final int? loopA;
   final int? loopB;
+  final bool loopArmed;
   final Set<String> enabledPartIds;
   final List<int> measures;
   final Map<String, int> rehearsalMarks;
@@ -1723,6 +1666,7 @@ class RemoteState {
       currentMeasure: _parseInt(raw['currentMeasure']) ?? 1,
       loopA: _parseInt(raw['loopA']),
       loopB: _parseInt(raw['loopB']),
+      loopArmed: raw['loopArmed'] == true,
       enabledPartIds: enabledPartsRaw is List
           ? enabledPartsRaw.map((entry) => entry.toString()).toSet()
           : <String>{},
@@ -1754,6 +1698,7 @@ class RemoteState {
     currentMeasure: 1,
     loopA: null,
     loopB: null,
+    loopArmed: false,
     enabledPartIds: <String>{},
     measures: <int>[],
     rehearsalMarks: <String, int>{},

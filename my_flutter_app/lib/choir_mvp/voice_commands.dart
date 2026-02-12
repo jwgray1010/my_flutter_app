@@ -2,67 +2,50 @@ import 'dart:math' as math;
 
 import 'models.dart';
 
-enum VoiceActionType {
+enum VoiceIntentType {
   play,
   pause,
   jumpToMeasure,
   jumpRelative,
-  setTempoPercent,
-  tempoFaster,
-  tempoSlower,
-  loopToggle,
+  setTempo,
+  adjustTempo,
   setLoopA,
   setLoopB,
-  clearLoop,
   setLoopRange,
-  setAllParts,
-  setPartEnabled,
-  setExactParts,
+  clearLoop,
+  setMixPreset,
+  setPartState,
   playStartingPitches,
 }
 
-class VoiceAction {
-  VoiceAction({
+class VoiceIntent {
+  const VoiceIntent({
     required this.type,
-    this.measure,
-    this.deltaMeasures,
-    this.tempoPercent,
-    this.part,
-    this.enabled,
-    this.parts,
-    this.loopStartMeasure,
-    this.loopEndMeasure,
+    required this.payload,
   });
 
-  final VoiceActionType type;
-  final int? measure;
-  final int? deltaMeasures;
-  final double? tempoPercent;
-  final ChoirPart? part;
-  final bool? enabled;
-  final Set<ChoirPart>? parts;
-  final int? loopStartMeasure;
-  final int? loopEndMeasure;
+  final VoiceIntentType type;
+  final Map<String, dynamic> payload;
 }
 
 class VoiceParseResult {
   const VoiceParseResult._({
-    required this.action,
+    required this.intent,
     required this.message,
     this.suggestion,
   });
 
-  final VoiceAction? action;
+  final VoiceIntent? intent;
   final String message;
   final String? suggestion;
 
-  bool get isSuccess => action != null;
+  bool get isSuccess => intent != null;
 
   factory VoiceParseResult.success({
-    required VoiceAction action,
+    required VoiceIntent intent,
     required String message,
   }) {
-    return VoiceParseResult._(action: action, message: message);
+    return VoiceParseResult._(intent: intent, message: message);
   }
 
   factory VoiceParseResult.failure({
@@ -70,7 +53,7 @@ class VoiceParseResult {
     String? suggestion,
   }) {
     return VoiceParseResult._(
-      action: null,
+      intent: null,
       message: message,
       suggestion: suggestion,
     );
@@ -92,14 +75,20 @@ class VoiceCommandParser {
 
     if (_isStartingPitchCommand(normalized)) {
       return VoiceParseResult.success(
-        action: VoiceAction(type: VoiceActionType.playStartingPitches),
+        intent: const VoiceIntent(
+          type: VoiceIntentType.playStartingPitches,
+          payload: <String, dynamic>{},
+        ),
         message: 'Play starting pitches',
       );
     }
 
     if (RegExp(r'\bclear loop\b').hasMatch(normalized)) {
       return VoiceParseResult.success(
-        action: VoiceAction(type: VoiceActionType.clearLoop),
+        intent: const VoiceIntent(
+          type: VoiceIntentType.clearLoop,
+          payload: <String, dynamic>{},
+        ),
         message: 'Clear loop',
       );
     }
@@ -107,10 +96,12 @@ class VoiceCommandParser {
     final loopRange = _parseLoopRange(normalized);
     if (loopRange != null) {
       return VoiceParseResult.success(
-        action: VoiceAction(
-          type: VoiceActionType.setLoopRange,
-          loopStartMeasure: loopRange.$1,
-          loopEndMeasure: loopRange.$2,
+        intent: VoiceIntent(
+          type: VoiceIntentType.setLoopRange,
+          payload: <String, dynamic>{
+            'a': loopRange.$1,
+            'b': loopRange.$2,
+          },
         ),
         message: 'Loop measures ${loopRange.$1} to ${loopRange.$2}',
       );
@@ -118,43 +109,58 @@ class VoiceCommandParser {
 
     if (RegExp(r'\bset loop a\b').hasMatch(normalized)) {
       return VoiceParseResult.success(
-        action: VoiceAction(type: VoiceActionType.setLoopA),
+        intent: const VoiceIntent(
+          type: VoiceIntentType.setLoopA,
+          payload: <String, dynamic>{},
+        ),
         message: 'Set loop A',
       );
     }
     if (RegExp(r'\bset loop b\b').hasMatch(normalized)) {
       return VoiceParseResult.success(
-        action: VoiceAction(type: VoiceActionType.setLoopB),
+        intent: const VoiceIntent(
+          type: VoiceIntentType.setLoopB,
+          payload: <String, dynamic>{},
+        ),
         message: 'Set loop B',
       );
     }
     if (RegExp(r'\bloop this\b').hasMatch(normalized) ||
         RegExp(r'^\s*loop\s*$').hasMatch(normalized)) {
       return VoiceParseResult.success(
-        action: VoiceAction(type: VoiceActionType.loopToggle),
-        message: 'Loop toggle',
+        intent: const VoiceIntent(
+          type: VoiceIntentType.setLoopA,
+          payload: <String, dynamic>{'armToggle': true},
+        ),
+        message: 'Toggle loop armed',
       );
     }
 
     final tempoPercent = _parseTempoPercent(normalized);
     if (tempoPercent != null) {
       return VoiceParseResult.success(
-        action: VoiceAction(
-          type: VoiceActionType.setTempoPercent,
-          tempoPercent: tempoPercent.toDouble(),
+        intent: VoiceIntent(
+          type: VoiceIntentType.setTempo,
+          payload: <String, dynamic>{'percent': tempoPercent},
         ),
         message: 'Set tempo to ${tempoPercent.toStringAsFixed(0)}%',
       );
     }
     if (RegExp(r'\bslower\b').hasMatch(normalized)) {
       return VoiceParseResult.success(
-        action: VoiceAction(type: VoiceActionType.tempoSlower),
+        intent: const VoiceIntent(
+          type: VoiceIntentType.adjustTempo,
+          payload: <String, dynamic>{'delta': -5},
+        ),
         message: 'Tempo slower',
       );
     }
     if (RegExp(r'\bfaster\b').hasMatch(normalized)) {
       return VoiceParseResult.success(
-        action: VoiceAction(type: VoiceActionType.tempoFaster),
+        intent: const VoiceIntent(
+          type: VoiceIntentType.adjustTempo,
+          payload: <String, dynamic>{'delta': 5},
+        ),
         message: 'Tempo faster',
       );
     }
@@ -162,9 +168,9 @@ class VoiceCommandParser {
     final relativeDelta = _parseRelativeMeasureDelta(normalized);
     if (relativeDelta != null) {
       return VoiceParseResult.success(
-        action: VoiceAction(
-          type: VoiceActionType.jumpRelative,
-          deltaMeasures: relativeDelta,
+        intent: VoiceIntent(
+          type: VoiceIntentType.jumpRelative,
+          payload: <String, dynamic>{'delta': relativeDelta},
         ),
         message: relativeDelta < 0
             ? 'Back ${relativeDelta.abs()} measure${relativeDelta.abs() == 1 ? '' : 's'}'
@@ -174,6 +180,12 @@ class VoiceCommandParser {
 
     final letterMatch = RegExp(r'\bletter\s+([a-z])\b').firstMatch(normalized);
     if (letterMatch != null) {
+      if (rehearsalMarks.isEmpty) {
+        return VoiceParseResult.failure(
+          message: 'No rehearsal marks in this score',
+          suggestion: "Try: 'measure 32'.",
+        );
+      }
       final letter = (letterMatch.group(1) ?? '').toUpperCase();
       final targetMeasure = rehearsalMarks[letter];
       if (targetMeasure == null) {
@@ -183,9 +195,12 @@ class VoiceCommandParser {
         );
       }
       return VoiceParseResult.success(
-        action: VoiceAction(
-          type: VoiceActionType.jumpToMeasure,
-          measure: targetMeasure,
+        intent: VoiceIntent(
+          type: VoiceIntentType.jumpToMeasure,
+          payload: <String, dynamic>{
+            'measure': targetMeasure,
+            'source': 'letter:$letter',
+          },
         ),
         message: 'Jump to letter $letter (measure $targetMeasure)',
       );
@@ -194,9 +209,9 @@ class VoiceCommandParser {
     final measureNumber = _parseMeasureNumber(normalized);
     if (measureNumber != null) {
       return VoiceParseResult.success(
-        action: VoiceAction(
-          type: VoiceActionType.jumpToMeasure,
-          measure: measureNumber,
+        intent: VoiceIntent(
+          type: VoiceIntentType.jumpToMeasure,
+          payload: <String, dynamic>{'measure': measureNumber},
         ),
         message: 'Jump to measure $measureNumber',
       );
@@ -211,14 +226,20 @@ class VoiceCommandParser {
         RegExp(r'\bplay\b').hasMatch(normalized) ||
         RegExp(r'\bstart\b').hasMatch(normalized)) {
       return VoiceParseResult.success(
-        action: VoiceAction(type: VoiceActionType.play),
+        intent: const VoiceIntent(
+          type: VoiceIntentType.play,
+          payload: <String, dynamic>{},
+        ),
         message: 'Play',
       );
     }
     if (RegExp(r'\bpause\b').hasMatch(normalized) ||
         RegExp(r'\bstop\b').hasMatch(normalized)) {
       return VoiceParseResult.success(
-        action: VoiceAction(type: VoiceActionType.pause),
+        intent: const VoiceIntent(
+          type: VoiceIntentType.pause,
+          payload: <String, dynamic>{},
+        ),
         message: 'Pause',
       );
     }
@@ -227,6 +248,72 @@ class VoiceCommandParser {
       message: "Didn't catch that.",
       suggestion: "Try: 'play', 'measure 32', or 'tempo 70'.",
     );
+  }
+}
+
+Map<String, dynamic>? intentToCommand(
+  VoiceIntent intent, {
+  required int currentMeasure,
+}) {
+  switch (intent.type) {
+    case VoiceIntentType.play:
+      return <String, dynamic>{'type': 'PLAY'};
+    case VoiceIntentType.pause:
+      return <String, dynamic>{'type': 'PAUSE'};
+    case VoiceIntentType.jumpToMeasure:
+      return <String, dynamic>{
+        'type': 'JUMP_TO_MEASURE',
+        'measure': intent.payload['measure'],
+      };
+    case VoiceIntentType.jumpRelative:
+      return <String, dynamic>{
+        'type': 'JUMP_RELATIVE',
+        'deltaMeasures': intent.payload['delta'],
+      };
+    case VoiceIntentType.setTempo:
+      return <String, dynamic>{
+        'type': 'SET_TEMPO',
+        'percent': intent.payload['percent'],
+      };
+    case VoiceIntentType.adjustTempo:
+      return <String, dynamic>{
+        'type': 'SET_TEMPO_ADJUST',
+        'delta': intent.payload['delta'],
+      };
+    case VoiceIntentType.setLoopA:
+      if (intent.payload['armToggle'] == true) {
+        return <String, dynamic>{'type': 'LOOP_ARM_TOGGLE'};
+      }
+      return <String, dynamic>{
+        'type': 'SET_LOOP_A',
+        'measure': intent.payload['measure'] ?? currentMeasure,
+      };
+    case VoiceIntentType.setLoopB:
+      return <String, dynamic>{
+        'type': 'SET_LOOP_B',
+        'measure': intent.payload['measure'] ?? currentMeasure,
+      };
+    case VoiceIntentType.setLoopRange:
+      return <String, dynamic>{
+        'type': 'SET_LOOP_RANGE',
+        'a': intent.payload['a'],
+        'b': intent.payload['b'],
+      };
+    case VoiceIntentType.clearLoop:
+      return <String, dynamic>{'type': 'CLEAR_LOOP'};
+    case VoiceIntentType.setMixPreset:
+      return <String, dynamic>{
+        'type': 'SET_MIX_PRESET',
+        ...intent.payload,
+      };
+    case VoiceIntentType.setPartState:
+      return <String, dynamic>{
+        'type': 'SET_PART_ENABLED',
+        'part': intent.payload['part'],
+        'enabled': intent.payload['enabled'],
+      };
+    case VoiceIntentType.playStartingPitches:
+      return <String, dynamic>{'type': 'PLAY_STARTING_PITCHES'};
   }
 }
 
@@ -379,27 +466,28 @@ double? _parseTempoPercent(String text) {
 VoiceParseResult? _parseParts(String text) {
   if (RegExp(r'^\s*all\s*$').hasMatch(text)) {
     return VoiceParseResult.success(
-      action: VoiceAction(type: VoiceActionType.setAllParts),
+      intent: const VoiceIntent(
+        type: VoiceIntentType.setMixPreset,
+        payload: <String, dynamic>{'preset': 'all'},
+      ),
       message: 'All parts on',
     );
   }
 
   if (RegExp(r'\bpiano off\b').hasMatch(text)) {
     return VoiceParseResult.success(
-      action: VoiceAction(
-        type: VoiceActionType.setPartEnabled,
-        part: ChoirPart.piano,
-        enabled: false,
+      intent: const VoiceIntent(
+        type: VoiceIntentType.setPartState,
+        payload: <String, dynamic>{'part': 'piano', 'enabled': false},
       ),
       message: 'Piano off',
     );
   }
   if (RegExp(r'\bpiano on\b').hasMatch(text)) {
     return VoiceParseResult.success(
-      action: VoiceAction(
-        type: VoiceActionType.setPartEnabled,
-        part: ChoirPart.piano,
-        enabled: true,
+      intent: const VoiceIntent(
+        type: VoiceIntentType.setPartState,
+        payload: <String, dynamic>{'part': 'piano', 'enabled': true},
       ),
       message: 'Piano on',
     );
@@ -418,7 +506,8 @@ VoiceParseResult? _parseParts(String text) {
   if (RegExp(r'\bbasses?\b|\bbass\b').hasMatch(text)) {
     mentionedParts.add(ChoirPart.bass);
   }
-  if (RegExp(r'\bpiano\b').hasMatch(text)) {
+  final mentionsPianoWord = RegExp(r'\bpiano\b').hasMatch(text);
+  if (mentionsPianoWord) {
     mentionedParts.add(ChoirPart.piano);
   }
 
@@ -433,6 +522,10 @@ VoiceParseResult? _parseParts(String text) {
   final enabled = <ChoirPart>{};
   if (onlyMode) {
     enabled.addAll(mentionedParts);
+    // "altos only" should still include piano by default.
+    if (!enabled.contains(ChoirPart.piano)) {
+      enabled.add(ChoirPart.piano);
+    }
   } else if (mentionedParts.length == 1 && mentionedParts.contains(ChoirPart.piano)) {
     enabled.add(ChoirPart.piano);
   } else {
@@ -443,9 +536,13 @@ VoiceParseResult? _parseParts(String text) {
   }
 
   return VoiceParseResult.success(
-    action: VoiceAction(
-      type: VoiceActionType.setExactParts,
-      parts: enabled,
+    intent: VoiceIntent(
+      type: VoiceIntentType.setMixPreset,
+      payload: <String, dynamic>{
+        'preset': 'exact',
+        'parts': enabled.map((part) => part.id).toList(),
+        'pianoOn': enabled.contains(ChoirPart.piano),
+      },
     ),
     message: 'Parts: ${_formatParts(enabled)}',
   );
@@ -501,6 +598,7 @@ const Set<String> _fillerWords = {
   'please',
   'lets',
   'let',
+  's',
   'us',
   'um',
   'uh',
