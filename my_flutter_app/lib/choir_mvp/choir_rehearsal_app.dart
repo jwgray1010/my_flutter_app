@@ -1,10 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'models.dart';
 import 'networking.dart';
 import 'rehearsal_controller.dart';
+import 'voice_commands.dart';
+import 'voice_ptt_service.dart';
 
 class ChoirRehearsalApp extends StatelessWidget {
   const ChoirRehearsalApp({super.key});
@@ -172,11 +175,21 @@ class MainPlayerScreen extends StatefulWidget {
 class _MainPlayerScreenState extends State<MainPlayerScreen> {
   final RehearsalController _controller = RehearsalController();
   final TextEditingController _jumpMeasureController = TextEditingController();
+  final VoicePttService _voiceService = VoicePttService();
+  final VoiceCommandParser _voiceParser = VoiceCommandParser();
+
+  bool _voicePermissionGranted = false;
+  bool _isPttListening = false;
+  bool _isPttProcessing = false;
+  bool _choirRoomMode = false;
+  bool _requireWakePhraseInChoirMode = true;
+  String _wakePhrase = 'Podium';
 
   @override
   void initState() {
     super.initState();
     unawaited(_controller.initialize());
+    unawaited(_initializeVoice());
   }
 
   @override
@@ -184,6 +197,16 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
     _jumpMeasureController.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _initializeVoice() async {
+    final granted = await _voiceService.requestPermissions();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _voicePermissionGranted = granted;
+    });
   }
 
   @override
@@ -199,12 +222,34 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
           appBar: AppBar(
             title: const Text('Main Player'),
             actions: [
+              if (_isPttListening || _isPttProcessing)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Center(
+                    child: _VoiceStatusPill(
+                      isListening: _isPttListening,
+                      isProcessing: _isPttProcessing,
+                    ),
+                  ),
+                ),
               Padding(
-                padding: const EdgeInsets.only(right: 16),
+                padding: const EdgeInsets.only(right: 10),
                 child: Center(
                   child: Text(
                     'Remote port ${_controller.serverPort}',
                     style: const TextStyle(fontSize: 16),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Center(
+                  child: _PttHoldButton(
+                    size: 56,
+                    isListening: _isPttListening,
+                    onPressStart: _handleVoicePressStart,
+                    onPressEnd: _handleVoicePressEnd,
+                    semanticsLabel: 'Hold to talk',
                   ),
                 ),
               ),
@@ -250,6 +295,29 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                   loopA: playback.loopA,
                   loopB: playback.loopB,
                   isPlaying: playback.isPlaying,
+                ),
+                const SizedBox(height: 12),
+                _VoiceSafetyCard(
+                  choirRoomMode: _choirRoomMode,
+                  requireWakePhrase: _requireWakePhraseInChoirMode,
+                  wakePhrase: _wakePhrase,
+                  confidenceThreshold: _minimumConfidence,
+                  permissionGranted: _voicePermissionGranted,
+                  onChoirRoomModeChanged: (value) {
+                    setState(() {
+                      _choirRoomMode = value;
+                    });
+                  },
+                  onRequireWakePhraseChanged: (value) {
+                    setState(() {
+                      _requireWakePhraseInChoirMode = value;
+                    });
+                  },
+                  onWakePhraseChanged: (value) {
+                    setState(() {
+                      _wakePhrase = value;
+                    });
+                  },
                 ),
                 const SizedBox(height: 16),
                 Wrap(
@@ -380,6 +448,412 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
     }
     _controller.jumpToMeasure(measure);
   }
+
+  double get _minimumConfidence => _choirRoomMode ? 0.62 : 0.35;
+
+  Future<void> _handleVoicePressStart() async {
+    if (_isPttListening || _isPttProcessing) {
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    if (!_voicePermissionGranted) {
+      final granted = await _voiceService.requestPermissions();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _voicePermissionGranted = granted;
+      });
+      if (!granted) {
+        _showVoiceToast(
+          success: false,
+          message: 'Speech permission denied.',
+          suggestion: 'Enable microphone + speech permissions in Settings.',
+        );
+        return;
+      }
+    }
+
+    final started = await _voiceService.startListening(
+      preferOffline: true,
+      allowStandardFallback: true,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (!started.started) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: started.message,
+      );
+      return;
+    }
+    setState(() {
+      _isPttListening = true;
+    });
+  }
+
+  Future<void> _handleVoicePressEnd() async {
+    if (!_isPttListening) {
+      return;
+    }
+    HapticFeedback.selectionClick();
+    setState(() {
+      _isPttListening = false;
+      _isPttProcessing = true;
+    });
+
+    final stopResult = await _voiceService.stopListening();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isPttProcessing = false;
+    });
+
+    final normalized = normalizeTranscript(stopResult.transcript);
+    if (normalized.isEmpty) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try: 'measure 32'.",
+      );
+      return;
+    }
+    if (stopResult.confidence < _minimumConfidence) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try again clearly: 'go to measure 32'.",
+      );
+      return;
+    }
+
+    var parserText = normalized;
+    if (_choirRoomMode && _requireWakePhraseInChoirMode) {
+      final wake = _wakePhrase.toLowerCase();
+      final hasWakePhrase = parserText.contains(wake);
+      if (!hasWakePhrase) {
+        _showVoiceToast(
+          success: false,
+          message: "Didn't catch that.",
+          suggestion: "Use wake phrase '$wake' first.",
+        );
+        return;
+      }
+      parserText = parserText.replaceAll(RegExp('\\b$wake\\b'), '').trim();
+    }
+
+    final rehearsalMarks = _controller.playback.score?.rehearsalMarks ?? const <String, int>{};
+    final parsed = _voiceParser.parse(
+      parserText,
+      rehearsalMarks: rehearsalMarks,
+    );
+    if (!parsed.isSuccess || parsed.action == null) {
+      _showVoiceToast(
+        success: false,
+        message: parsed.message,
+        suggestion: parsed.suggestion,
+      );
+      return;
+    }
+
+    final appliedMessage = await _applyMainVoiceAction(parsed.action!);
+    _showVoiceToast(
+      success: true,
+      message: appliedMessage ?? parsed.message,
+      suggestion: null,
+    );
+  }
+
+  Future<String?> _applyMainVoiceAction(VoiceAction action) async {
+    switch (action.type) {
+      case VoiceActionType.play:
+        await _controller.play();
+        return 'Play';
+      case VoiceActionType.pause:
+        _controller.pause();
+        return 'Pause';
+      case VoiceActionType.jumpToMeasure:
+        final measure = action.measure;
+        if (measure == null) {
+          return null;
+        }
+        _controller.jumpToMeasure(measure);
+        return 'Jump to measure $measure';
+      case VoiceActionType.jumpRelative:
+        final delta = action.deltaMeasures;
+        if (delta == null) {
+          return null;
+        }
+        _controller.jumpByMeasures(delta);
+        return delta < 0 ? 'Back ${delta.abs()}' : 'Forward $delta';
+      case VoiceActionType.setTempoPercent:
+        final percent = action.tempoPercent;
+        if (percent == null) {
+          return null;
+        }
+        _controller.setTempoPercent(percent);
+        return 'Tempo ${percent.toStringAsFixed(0)}%';
+      case VoiceActionType.tempoFaster:
+        _controller.increaseTempo();
+        return 'Tempo faster';
+      case VoiceActionType.tempoSlower:
+        _controller.decreaseTempo();
+        return 'Tempo slower';
+      case VoiceActionType.loopToggle:
+        final playback = _controller.playback;
+        if (playback.loopA == null) {
+          _controller.setLoopAAtCurrentMeasure();
+          return 'Set loop A';
+        }
+        if (playback.loopB == null) {
+          _controller.setLoopBAtCurrentMeasure();
+          return 'Set loop B';
+        }
+        _controller.clearLoop();
+        return 'Clear loop';
+      case VoiceActionType.setLoopA:
+        _controller.setLoopAAtCurrentMeasure();
+        return 'Set loop A';
+      case VoiceActionType.setLoopB:
+        _controller.setLoopBAtCurrentMeasure();
+        return 'Set loop B';
+      case VoiceActionType.clearLoop:
+        _controller.clearLoop();
+        return 'Clear loop';
+      case VoiceActionType.setLoopRange:
+        final start = action.loopStartMeasure;
+        final end = action.loopEndMeasure;
+        if (start == null || end == null) {
+          return null;
+        }
+        _controller.jumpToMeasure(start);
+        _controller.playback.setLoopA(start);
+        _controller.playback.setLoopB(end);
+        return 'Loop measures $start to $end';
+      case VoiceActionType.setAllParts:
+        _controller.enableAllParts();
+        return 'All parts on';
+      case VoiceActionType.setPartEnabled:
+        final part = action.part;
+        final enabled = action.enabled;
+        if (part == null || enabled == null) {
+          return null;
+        }
+        _controller.setPartEnabled(part, enabled);
+        return '${part.shortLabel} ${enabled ? 'on' : 'off'}';
+      case VoiceActionType.setExactParts:
+        final parts = action.parts;
+        if (parts == null) {
+          return null;
+        }
+        _controller.setEnabledParts(parts);
+        final labels = parts.map((part) => part.shortLabel).join(' + ');
+        return 'Parts: $labels';
+      case VoiceActionType.playStartingPitches:
+        await _controller.playStartingPitches();
+        return 'Play starting pitches';
+    }
+  }
+
+  void _showVoiceToast({
+    required bool success,
+    required String message,
+    String? suggestion,
+  }) {
+    final icon = success ? '✅' : '❌';
+    final text = suggestion == null ? '$icon $message' : '$icon $message  $suggestion';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+          content: Text(text),
+        ),
+      );
+  }
+}
+
+class _PttHoldButton extends StatelessWidget {
+  const _PttHoldButton({
+    required this.size,
+    required this.isListening,
+    required this.onPressStart,
+    required this.onPressEnd,
+    required this.semanticsLabel,
+  });
+
+  final double size;
+  final bool isListening;
+  final Future<void> Function() onPressStart;
+  final Future<void> Function() onPressEnd;
+  final String semanticsLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: semanticsLabel,
+      child: Listener(
+        onPointerDown: (_) {
+          unawaited(onPressStart());
+        },
+        onPointerUp: (_) {
+          unawaited(onPressEnd());
+        },
+        onPointerCancel: (_) {
+          unawaited(onPressEnd());
+        },
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: isListening ? Colors.redAccent : const Color(0xFF7C4DFF),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: isListening ? Colors.white : Colors.white38,
+              width: 2,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black54,
+                blurRadius: 8,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Icon(
+            Icons.mic,
+            size: size * 0.5,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VoiceStatusPill extends StatelessWidget {
+  const _VoiceStatusPill({
+    required this.isListening,
+    required this.isProcessing,
+  });
+
+  final bool isListening;
+  final bool isProcessing;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = isListening
+        ? 'Listening...'
+        : isProcessing
+        ? 'Processing...'
+        : '';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: isListening ? Colors.redAccent : Colors.blueGrey,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+class _VoiceSafetyCard extends StatelessWidget {
+  const _VoiceSafetyCard({
+    required this.choirRoomMode,
+    required this.requireWakePhrase,
+    required this.wakePhrase,
+    required this.confidenceThreshold,
+    required this.permissionGranted,
+    required this.onChoirRoomModeChanged,
+    required this.onRequireWakePhraseChanged,
+    required this.onWakePhraseChanged,
+  });
+
+  final bool choirRoomMode;
+  final bool requireWakePhrase;
+  final String wakePhrase;
+  final double confidenceThreshold;
+  final bool permissionGranted;
+  final ValueChanged<bool> onChoirRoomModeChanged;
+  final ValueChanged<bool> onRequireWakePhraseChanged;
+  final ValueChanged<String> onWakePhraseChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF1A1A1A),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Voice Command Safety',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Choir Room Mode'),
+                    subtitle: Text(
+                      'Confidence >= ${(confidenceThreshold * 100).toStringAsFixed(0)}%',
+                    ),
+                    value: choirRoomMode,
+                    onChanged: onChoirRoomModeChanged,
+                  ),
+                ),
+                Text(
+                  permissionGranted ? 'Voice ready' : 'No permission',
+                  style: TextStyle(
+                    color: permissionGranted ? Colors.greenAccent : Colors.orangeAccent,
+                  ),
+                ),
+              ],
+            ),
+            if (choirRoomMode) ...[
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Require wake phrase'),
+                value: requireWakePhrase,
+                onChanged: onRequireWakePhraseChanged,
+              ),
+              if (requireWakePhrase)
+                Row(
+                  children: [
+                    const Text('Wake phrase:'),
+                    const SizedBox(width: 12),
+                    DropdownButton<String>(
+                      value: wakePhrase,
+                      items: const [
+                        DropdownMenuItem(value: 'Podium', child: Text('Podium')),
+                        DropdownMenuItem(value: 'Maestro', child: Text('Maestro')),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          onWakePhraseChanged(value);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _CurrentStatusCard extends StatelessWidget {
@@ -423,7 +897,7 @@ class _CurrentStatusCard extends StatelessWidget {
               ),
             ),
             Text(
-              'Loop ${loopA?.toString() ?? '-'} → ${loopB?.toString() ?? '-'}',
+              'Loop ${loopA?.toString() ?? '-'} -> ${loopB?.toString() ?? '-'}',
               style: const TextStyle(fontSize: 22),
             ),
           ],
@@ -486,12 +960,22 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
   final TextEditingController _manualHostController = TextEditingController();
   final TextEditingController _searchMeasureController = TextEditingController();
   final List<int> _recentMeasures = [];
+  final VoicePttService _voiceService = VoicePttService();
+  final VoiceCommandParser _voiceParser = VoiceCommandParser();
+
+  bool _voicePermissionGranted = false;
+  bool _isPttListening = false;
+  bool _isPttProcessing = false;
+  bool _choirRoomMode = false;
+  bool _requireWakePhraseInChoirMode = true;
+  String _wakePhrase = 'Podium';
 
   @override
   void initState() {
     super.initState();
     unawaited(_client.startDiscovery());
     _client.addListener(_attemptAutoConnect);
+    unawaited(_initializeVoice());
   }
 
   @override
@@ -501,6 +985,16 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
     _manualHostController.dispose();
     _searchMeasureController.dispose();
     super.dispose();
+  }
+
+  Future<void> _initializeVoice() async {
+    final granted = await _voiceService.requestPermissions();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _voicePermissionGranted = granted;
+    });
   }
 
   @override
@@ -514,6 +1008,30 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
           child: Scaffold(
             appBar: AppBar(
               title: const Text('Phone Remote'),
+              actions: [
+                if (_isPttListening || _isPttProcessing)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Center(
+                      child: _VoiceStatusPill(
+                        isListening: _isPttListening,
+                        isProcessing: _isPttProcessing,
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: Center(
+                    child: _PttHoldButton(
+                      size: 50,
+                      isListening: _isPttListening,
+                      onPressStart: _handleVoicePressStart,
+                      onPressEnd: _handleVoicePressEnd,
+                      semanticsLabel: 'Hold to talk on remote',
+                    ),
+                  ),
+                ),
+              ],
               bottom: const TabBar(
                 tabs: [
                   Tab(text: 'Measures'),
@@ -530,6 +1048,26 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
                   manualHostController: _manualHostController,
                   recentMeasures: _recentMeasures,
                   onJumpMeasure: _jumpToMeasure,
+                  choirRoomMode: _choirRoomMode,
+                  requireWakePhrase: _requireWakePhraseInChoirMode,
+                  wakePhrase: _wakePhrase,
+                  confidenceThreshold: _minimumConfidence,
+                  permissionGranted: _voicePermissionGranted,
+                  onChoirRoomModeChanged: (value) {
+                    setState(() {
+                      _choirRoomMode = value;
+                    });
+                  },
+                  onRequireWakePhraseChanged: (value) {
+                    setState(() {
+                      _requireWakePhraseInChoirMode = value;
+                    });
+                  },
+                  onWakePhraseChanged: (value) {
+                    setState(() {
+                      _wakePhrase = value;
+                    });
+                  },
                 ),
                 _PartsTab(
                   state: state,
@@ -608,6 +1146,266 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
     }
     setState(() {});
   }
+
+  double get _minimumConfidence => _choirRoomMode ? 0.62 : 0.35;
+
+  Future<void> _handleVoicePressStart() async {
+    if (_isPttListening || _isPttProcessing) {
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    if (!_voicePermissionGranted) {
+      final granted = await _voiceService.requestPermissions();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _voicePermissionGranted = granted;
+      });
+      if (!granted) {
+        _showVoiceToast(
+          success: false,
+          message: 'Speech permission denied.',
+          suggestion: 'Enable microphone + speech permissions in Settings.',
+        );
+        return;
+      }
+    }
+
+    final started = await _voiceService.startListening(
+      preferOffline: true,
+      allowStandardFallback: true,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (!started.started) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: started.message,
+      );
+      return;
+    }
+    setState(() {
+      _isPttListening = true;
+    });
+  }
+
+  Future<void> _handleVoicePressEnd() async {
+    if (!_isPttListening) {
+      return;
+    }
+    HapticFeedback.selectionClick();
+    setState(() {
+      _isPttListening = false;
+      _isPttProcessing = true;
+    });
+
+    final stopResult = await _voiceService.stopListening();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isPttProcessing = false;
+    });
+
+    if (!_client.isConnected) {
+      _showVoiceToast(
+        success: false,
+        message: 'Remote not connected.',
+        suggestion: 'Connect to the main player first.',
+      );
+      return;
+    }
+
+    final normalized = normalizeTranscript(stopResult.transcript);
+    if (normalized.isEmpty) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try: 'measure 32'.",
+      );
+      return;
+    }
+    if (stopResult.confidence < _minimumConfidence) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try again clearly: 'go to measure 32'.",
+      );
+      return;
+    }
+
+    var parserText = normalized;
+    if (_choirRoomMode && _requireWakePhraseInChoirMode) {
+      final wake = _wakePhrase.toLowerCase();
+      final hasWakePhrase = parserText.contains(wake);
+      if (!hasWakePhrase) {
+        _showVoiceToast(
+          success: false,
+          message: "Didn't catch that.",
+          suggestion: "Use wake phrase '$wake' first.",
+        );
+        return;
+      }
+      parserText = parserText.replaceAll(RegExp('\\b$wake\\b'), '').trim();
+    }
+
+    final state = RemoteState.fromMap(_client.latestState);
+    final parsed = _voiceParser.parse(
+      parserText,
+      rehearsalMarks: state.rehearsalMarks,
+    );
+    if (!parsed.isSuccess || parsed.action == null) {
+      _showVoiceToast(
+        success: false,
+        message: parsed.message,
+        suggestion: parsed.suggestion,
+      );
+      return;
+    }
+
+    final appliedMessage = _applyRemoteVoiceAction(parsed.action!, state);
+    _showVoiceToast(
+      success: true,
+      message: appliedMessage ?? parsed.message,
+      suggestion: null,
+    );
+  }
+
+  String? _applyRemoteVoiceAction(VoiceAction action, RemoteState state) {
+    switch (action.type) {
+      case VoiceActionType.play:
+        _client.sendCommand({'type': 'PLAY'});
+        return 'Play';
+      case VoiceActionType.pause:
+        _client.sendCommand({'type': 'PAUSE'});
+        return 'Pause';
+      case VoiceActionType.jumpToMeasure:
+        final measure = action.measure;
+        if (measure == null) {
+          return null;
+        }
+        _client.sendCommand({'type': 'JUMP_TO_MEASURE', 'measure': measure});
+        return 'Jump to measure $measure';
+      case VoiceActionType.jumpRelative:
+        final delta = action.deltaMeasures;
+        if (delta == null) {
+          return null;
+        }
+        _client.sendCommand({'type': 'JUMP_RELATIVE', 'deltaMeasures': delta});
+        return delta < 0 ? 'Back ${delta.abs()}' : 'Forward $delta';
+      case VoiceActionType.setTempoPercent:
+        final percent = action.tempoPercent;
+        if (percent == null) {
+          return null;
+        }
+        _client.sendCommand({'type': 'SET_TEMPO', 'percent': percent});
+        return 'Tempo ${percent.toStringAsFixed(0)}%';
+      case VoiceActionType.tempoFaster:
+        _client.sendCommand({
+          'type': 'SET_TEMPO',
+          'percent': (state.tempoPercent + 5).clamp(50, 100),
+        });
+        return 'Tempo faster';
+      case VoiceActionType.tempoSlower:
+        _client.sendCommand({
+          'type': 'SET_TEMPO',
+          'percent': (state.tempoPercent - 5).clamp(50, 100),
+        });
+        return 'Tempo slower';
+      case VoiceActionType.loopToggle:
+        if (state.loopA == null) {
+          _client.sendCommand({
+            'type': 'SET_LOOP_A',
+            'measure': state.currentMeasure,
+          });
+          return 'Set loop A';
+        }
+        if (state.loopB == null) {
+          _client.sendCommand({
+            'type': 'SET_LOOP_B',
+            'measure': state.currentMeasure,
+          });
+          return 'Set loop B';
+        }
+        _client.sendCommand({'type': 'CLEAR_LOOP'});
+        return 'Clear loop';
+      case VoiceActionType.setLoopA:
+        _client.sendCommand({
+          'type': 'SET_LOOP_A',
+          'measure': state.currentMeasure,
+        });
+        return 'Set loop A';
+      case VoiceActionType.setLoopB:
+        _client.sendCommand({
+          'type': 'SET_LOOP_B',
+          'measure': state.currentMeasure,
+        });
+        return 'Set loop B';
+      case VoiceActionType.clearLoop:
+        _client.sendCommand({'type': 'CLEAR_LOOP'});
+        return 'Clear loop';
+      case VoiceActionType.setLoopRange:
+        final start = action.loopStartMeasure;
+        final end = action.loopEndMeasure;
+        if (start == null || end == null) {
+          return null;
+        }
+        _client.sendCommand({'type': 'JUMP_TO_MEASURE', 'measure': start});
+        _client.sendCommand({'type': 'SET_LOOP_A', 'measure': start});
+        _client.sendCommand({'type': 'SET_LOOP_B', 'measure': end});
+        return 'Loop measures $start to $end';
+      case VoiceActionType.setAllParts:
+        _client.sendCommand({'type': 'SET_ALL_PARTS'});
+        return 'All parts on';
+      case VoiceActionType.setPartEnabled:
+        final part = action.part;
+        final enabled = action.enabled;
+        if (part == null || enabled == null) {
+          return null;
+        }
+        _client.sendCommand({
+          'type': 'SET_PART_ENABLED',
+          'part': part.id,
+          'enabled': enabled,
+        });
+        return '${part.shortLabel} ${enabled ? 'on' : 'off'}';
+      case VoiceActionType.setExactParts:
+        final parts = action.parts;
+        if (parts == null) {
+          return null;
+        }
+        _client.sendCommand({
+          'type': 'SET_PARTS_EXACT',
+          'parts': parts.map((part) => part.id).toList(),
+        });
+        final labels = parts.map((part) => part.shortLabel).join(' + ');
+        return 'Parts: $labels';
+      case VoiceActionType.playStartingPitches:
+        _client.sendCommand({'type': 'PLAY_STARTING_PITCHES'});
+        return 'Play starting pitches';
+    }
+  }
+
+  void _showVoiceToast({
+    required bool success,
+    required String message,
+    String? suggestion,
+  }) {
+    final icon = success ? '✅' : '❌';
+    final text = suggestion == null ? '$icon $message' : '$icon $message  $suggestion';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+          content: Text(text),
+        ),
+      );
+  }
 }
 
 class _MeasuresTab extends StatelessWidget {
@@ -618,6 +1416,14 @@ class _MeasuresTab extends StatelessWidget {
     required this.manualHostController,
     required this.recentMeasures,
     required this.onJumpMeasure,
+    required this.choirRoomMode,
+    required this.requireWakePhrase,
+    required this.wakePhrase,
+    required this.confidenceThreshold,
+    required this.permissionGranted,
+    required this.onChoirRoomModeChanged,
+    required this.onRequireWakePhraseChanged,
+    required this.onWakePhraseChanged,
   });
 
   final RemoteState state;
@@ -626,6 +1432,14 @@ class _MeasuresTab extends StatelessWidget {
   final TextEditingController manualHostController;
   final List<int> recentMeasures;
   final ValueChanged<int> onJumpMeasure;
+  final bool choirRoomMode;
+  final bool requireWakePhrase;
+  final String wakePhrase;
+  final double confidenceThreshold;
+  final bool permissionGranted;
+  final ValueChanged<bool> onChoirRoomModeChanged;
+  final ValueChanged<bool> onRequireWakePhraseChanged;
+  final ValueChanged<String> onWakePhraseChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -637,6 +1451,17 @@ class _MeasuresTab extends StatelessWidget {
           Text(
             client.connectionStatus ?? 'Searching for player...',
             style: const TextStyle(fontSize: 16, color: Colors.white70),
+          ),
+          const SizedBox(height: 8),
+          _VoiceSafetyCard(
+            choirRoomMode: choirRoomMode,
+            requireWakePhrase: requireWakePhrase,
+            wakePhrase: wakePhrase,
+            confidenceThreshold: confidenceThreshold,
+            permissionGranted: permissionGranted,
+            onChoirRoomModeChanged: onChoirRoomModeChanged,
+            onRequireWakePhraseChanged: onRequireWakePhraseChanged,
+            onWakePhraseChanged: onWakePhraseChanged,
           ),
           const SizedBox(height: 8),
           Wrap(
@@ -871,6 +1696,7 @@ class RemoteState {
     required this.loopB,
     required this.enabledPartIds,
     required this.measures,
+    required this.rehearsalMarks,
   });
 
   final bool loaded;
@@ -881,6 +1707,7 @@ class RemoteState {
   final int? loopB;
   final Set<String> enabledPartIds;
   final List<int> measures;
+  final Map<String, int> rehearsalMarks;
 
   factory RemoteState.fromMap(Map<String, dynamic>? raw) {
     if (raw == null) {
@@ -888,6 +1715,7 @@ class RemoteState {
     }
     final enabledPartsRaw = raw['enabledParts'];
     final measuresRaw = raw['measures'];
+    final rehearsalMarksRaw = raw['rehearsalMarks'];
     return RemoteState(
       loaded: raw['loaded'] == true,
       isPlaying: raw['isPlaying'] == true,
@@ -904,6 +1732,18 @@ class RemoteState {
                 .whereType<int>()
                 .toList()
           : <int>[],
+      rehearsalMarks: rehearsalMarksRaw is Map
+          ? Map<String, int>.fromEntries(
+              rehearsalMarksRaw.entries
+                  .map(
+                    (entry) => MapEntry(
+                      entry.key.toString().toUpperCase(),
+                      _parseInt(entry.value) ?? 0,
+                    ),
+                  )
+                  .where((entry) => entry.value > 0),
+            )
+          : <String, int>{},
     );
   }
 
@@ -916,6 +1756,7 @@ class RemoteState {
     loopB: null,
     enabledPartIds: <String>{},
     measures: <int>[],
+    rehearsalMarks: <String, int>{},
   );
 }
 

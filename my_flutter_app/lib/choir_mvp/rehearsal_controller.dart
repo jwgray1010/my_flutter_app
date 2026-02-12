@@ -131,6 +131,11 @@ class RehearsalController extends ChangeNotifier {
     _server.broadcastState();
   }
 
+  void setEnabledParts(Set<ChoirPart> enabled) {
+    _playback.setEnabledParts(enabled);
+    _server.broadcastState();
+  }
+
   void setLoopAAtCurrentMeasure() {
     _playback.setLoopA(_playback.currentMeasure);
     _server.broadcastState();
@@ -144,6 +149,28 @@ class RehearsalController extends ChangeNotifier {
   void clearLoop() {
     _playback.clearLoop();
     _server.broadcastState();
+  }
+
+  Future<void> playStartingPitches({
+    Set<ChoirPart>? preferredParts,
+  }) async {
+    await _playback.playStartingPitches(preferredParts: preferredParts);
+    _server.broadcastState();
+  }
+
+  bool jumpToRehearsalMark(String rawMark) {
+    final score = _playback.score;
+    if (score == null) {
+      return false;
+    }
+    final normalized = rawMark.trim().toUpperCase();
+    final measure = score.rehearsalMarks[normalized];
+    if (measure == null) {
+      return false;
+    }
+    _playback.jumpToMeasure(measure);
+    _server.broadcastState();
+    return true;
   }
 
   @override
@@ -204,6 +231,19 @@ class RehearsalController extends ChangeNotifier {
           _playback.setPartEnabled(part, enabled);
         }
         break;
+      case 'SET_PARTS_EXACT':
+        final rawParts = command['parts'];
+        if (rawParts is List) {
+          final enabled = <ChoirPart>{};
+          for (final raw in rawParts) {
+            final parsed = choirPartFromId(raw.toString());
+            if (parsed != null) {
+              enabled.add(parsed);
+            }
+          }
+          _playback.setEnabledParts(enabled);
+        }
+        break;
       case 'SET_ALL_PARTS':
         _playback.setAllPartsEnabled();
         break;
@@ -221,6 +261,9 @@ class RehearsalController extends ChangeNotifier {
         break;
       case 'CLEAR_LOOP':
         _playback.clearLoop();
+        break;
+      case 'PLAY_STARTING_PITCHES':
+        unawaited(_playback.playStartingPitches());
         break;
       default:
         return;

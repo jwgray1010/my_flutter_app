@@ -111,6 +111,7 @@ class ParsedScore {
     required this.baseBpm,
     required this.totalBeats,
     required this.availableParts,
+    required this.rehearsalMarks,
   }) : measureNumbers = measureMap.map((entry) => entry.measureNumber).toList();
 
   final List<MeasureMapEntry> measureMap;
@@ -119,6 +120,7 @@ class ParsedScore {
   final double baseBpm;
   final double totalBeats;
   final Set<ChoirPart> availableParts;
+  final Map<String, int> rehearsalMarks;
 
   double? beatForMeasure(int measureNumber) {
     for (final entry in measureMap) {
