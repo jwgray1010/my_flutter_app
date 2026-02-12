@@ -320,7 +320,12 @@ class RemoteClient extends ChangeNotifier {
     _staleCleanupTimer?.cancel();
     _discoverySocket?.close();
     _discoverySocket = null;
-    unawaited(disconnect());
+    _commandSubscription?.cancel();
+    _commandSubscription = null;
+    try {
+      _commandSocket?.destroy();
+    } catch (_) {}
+    _commandSocket = null;
     super.dispose();
   }
 
