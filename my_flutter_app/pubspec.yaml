@@ -82,6 +82,9 @@ dependencies:
   
   # Shared preferences for keyboard settings
   shared_preferences: ^2.2.2
+  xml: ^6.6.1
+  file_picker: ^10.3.10
+  flutter_midi_pro: ^3.1.6
 
 dev_dependencies:
   flutter_test:
@@ -124,6 +127,7 @@ flutter:
     - assets/apple_logo.png
     - assets/coach.svg
     - assets/insight.svg
+    - assets/choir/tight_piano.sf2
 
   # To add assets to your application, add an assets section, like this:
   # assets:
