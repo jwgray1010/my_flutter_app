@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'networking.dart';
@@ -13,47 +14,54 @@ class RokuRemoteScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('iPhone App')),
+      backgroundColor: _RokuTokens.bg,
+      appBar: AppBar(
+        backgroundColor: _RokuTokens.bg,
+        title: const Text('PHONE APP'),
+      ),
       body: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
             const Text(
               'Choose Mode',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
+              style: _RokuTokens.title,
             ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
+            const SizedBox(height: 22),
+            _RokuButton(
+              label: 'REMOTE CONTROL',
+              height: 92,
+              accent: true,
               onPressed: () {
+                _tapHaptic();
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const RemoteControlPadScreen(),
                   ),
                 );
               },
-              icon: const Icon(Icons.settings_remote),
-              label: const Text('Remote Control'),
             ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
+            const SizedBox(height: 14),
+            _RokuButton(
+              label: 'STATION MODE',
+              height: 92,
               onPressed: () {
+                _tapHaptic();
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const StationModeScreen(),
                   ),
                 );
               },
-              icon: const Icon(Icons.school),
-              label: const Text('Station Mode'),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 14),
             const Text(
-              'Station Mode is in-school and locked to one station session.',
+              'Station Mode is locked to one in-school station session.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white70),
+              style: _RokuTokens.smallLabel,
             ),
           ],
         ),
@@ -90,182 +98,189 @@ class _RemoteControlPadScreenState extends State<RemoteControlPadScreen> {
       animation: _client,
       builder: (context, _) {
         final state = RokuRemoteState.fromMap(_client.latestState);
-        final connectedName = _client.pairedProfile?.name ?? 'Not paired';
+        final connected = _client.isConnected;
+        final hasPairing = _client.pairedProfile != null;
         return Scaffold(
+          backgroundColor: _RokuTokens.bg,
           appBar: AppBar(
-            title: const Text('Remote Control'),
+            backgroundColor: _RokuTokens.bg,
+            title: const Text('REMOTE'),
             actions: [
-              IconButton(
+              TextButton(
                 onPressed: _openPairScreen,
-                icon: const Icon(Icons.qr_code_scanner),
-                tooltip: 'Pair Device',
+                child: const Text(
+                  'PAIR',
+                  style: TextStyle(color: _RokuTokens.textPrimary),
+                ),
               ),
             ],
           ),
-          body: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Device: $connectedName'),
-                        Text(
-                          _client.connectionStatus ?? 'Disconnected',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                        if (state.pieceName.isNotEmpty)
-                          Text(
-                            state.pieceName,
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 12,
-                          runSpacing: 6,
-                          children: [
-                            Text('Measure ${state.currentMeasure}'),
-                            Text('Tempo ${state.tempoPercent}%'),
-                            Text(
-                              state.loopLabel,
-                              style: TextStyle(
-                                color: state.loopEnabled || state.loopArmed
-                                    ? Colors.greenAccent
-                                    : Colors.white70,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _StatusStrip(
+                    connected: connected,
+                    currentMeasure: state.currentMeasure,
+                    tempoPercent: state.tempoPercent,
+                    showLoop: state.loopEnabled || state.loopArmed,
+                    disconnectedText: 'Disconnected',
                   ),
-                ),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: GridView.count(
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 10,
-                    crossAxisSpacing: 10,
-                    childAspectRatio: 1.8,
+                  const SizedBox(height: 16),
+                  if (!hasPairing) ...[
+                    _RokuButton(
+                      label: 'PAIR REMOTE',
+                      height: 86,
+                      accent: true,
+                      onPressed: _openPairScreen,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  if (hasPairing && !connected) ...[
+                    _RokuButton(
+                      label: _client.isConnecting ? 'RECONNECTING...' : 'RECONNECT',
+                      height: 86,
+                      accent: true,
+                      onPressed: _client.isConnecting
+                          ? null
+                          : () async {
+                              _tapHaptic();
+                              await _client.connectPaired();
+                            },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  _RokuButton(
+                    label: state.isPlaying ? 'PAUSE' : 'PLAY',
+                    height: 108,
+                    accent: true,
+                    onPressed: connected ? () => _send('TOGGLE_PLAY') : null,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
                     children: [
-                      _BigRemoteButton(
-                        label: state.isPlaying ? 'Pause' : 'Play',
-                        icon: state.isPlaying ? Icons.pause : Icons.play_arrow,
-                        color: state.isPlaying ? Colors.orange : Colors.green,
-                        onTap: () => _send('TOGGLE_PLAY'),
-                      ),
-                      _BigRemoteButton(
-                        label: 'Loop',
-                        icon: Icons.repeat,
-                        color: (state.loopEnabled || state.loopArmed)
-                            ? Colors.teal
-                            : Colors.blueGrey,
-                        onTap: () {
-                          if (state.loopEnabled) {
-                            _send('CLEAR_LOOP');
-                          } else {
-                            _send('LOOP_ARM_TOGGLE');
-                          }
-                        },
-                      ),
-                      _BigRemoteButton(
-                        label: 'Back 2',
-                        icon: Icons.skip_previous,
-                        onTap: () => _send(
-                          'JUMP_RELATIVE',
-                          args: const <String, dynamic>{'deltaMeasures': -2},
+                      Expanded(
+                        child: _RokuButton(
+                          label: 'BACK 2',
+                          height: 82,
+                          onPressed: connected
+                              ? () => _send(
+                                  'JUMP_RELATIVE',
+                                  args: const <String, dynamic>{'deltaMeasures': -2},
+                                )
+                              : null,
                         ),
                       ),
-                      _BigRemoteButton(
-                        label: 'Forward 2',
-                        icon: Icons.skip_next,
-                        onTap: () => _send(
-                          'JUMP_RELATIVE',
-                          args: const <String, dynamic>{'deltaMeasures': 2},
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: _RokuButton(
+                          label: 'FWD 2',
+                          height: 82,
+                          onPressed: connected
+                              ? () => _send(
+                                  'JUMP_RELATIVE',
+                                  args: const <String, dynamic>{'deltaMeasures': 2},
+                                )
+                              : null,
                         ),
-                      ),
-                      _BigRemoteButton(
-                        label: 'Tempo -',
-                        icon: Icons.remove,
-                        onTap: () => _send(
-                          'ADJUST_TEMPO_PERCENT',
-                          args: const <String, dynamic>{'deltaPercent': -5},
-                        ),
-                      ),
-                      _BigRemoteButton(
-                        label: 'Tempo +',
-                        icon: Icons.add,
-                        onTap: () => _send(
-                          'ADJUST_TEMPO_PERCENT',
-                          args: const <String, dynamic>{'deltaPercent': 5},
-                        ),
-                      ),
-                      _BigRemoteButton(
-                        label: 'Back 4',
-                        icon: Icons.fast_rewind,
-                        onTap: () => _send(
-                          'JUMP_RELATIVE',
-                          args: const <String, dynamic>{'deltaMeasures': -4},
-                        ),
-                      ),
-                      _BigRemoteButton(
-                        label: 'Forward 4',
-                        icon: Icons.fast_forward,
-                        onTap: () => _send(
-                          'JUMP_RELATIVE',
-                          args: const <String, dynamic>{'deltaMeasures': 4},
-                        ),
-                      ),
-                      _BigRemoteButton(
-                        label: 'Starting Pitches',
-                        icon: Icons.music_note,
-                        onTap: () => _send('PLAY_STARTING_PITCHES'),
-                      ),
-                      _BigRemoteButton(
-                        label: 'Pair Device',
-                        icon: Icons.link,
-                        onTap: _openPairScreen,
                       ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => MeasuresRemoteScreen(client: _client),
-                            ),
-                          );
-                        },
-                        icon: const Icon(Icons.grid_on),
-                        label: const Text('Measures'),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _RokuButton(
+                          label: 'TEMPO -',
+                          height: 82,
+                          onPressed: connected
+                              ? () => _send(
+                                  'ADJUST_TEMPO_PERCENT',
+                                  args: const <String, dynamic>{'deltaPercent': -5},
+                                )
+                              : null,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => PartsRemoteScreen(client: _client),
-                            ),
-                          );
-                        },
-                        icon: const Icon(Icons.tune),
-                        label: const Text('Parts'),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: _RokuButton(
+                          label: 'TEMPO +',
+                          height: 82,
+                          onPressed: connected
+                              ? () => _send(
+                                  'ADJUST_TEMPO_PERCENT',
+                                  args: const <String, dynamic>{'deltaPercent': 5},
+                                )
+                              : null,
+                        ),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${state.tempoPercent}%',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      color: _RokuTokens.textPrimary,
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                  const SizedBox(height: 16),
+                  _RokuButton(
+                    label: 'LOOP',
+                    height: 82,
+                    selected: state.loopEnabled || state.loopArmed,
+                    onPressed: connected
+                        ? () {
+                            if (state.loopEnabled) {
+                              _send('CLEAR_LOOP');
+                              return;
+                            }
+                            _send('LOOP_ARM_TOGGLE');
+                          }
+                        : null,
+                  ),
+                  const Spacer(),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _RokuButton(
+                          label: 'MEASURES',
+                          height: 68,
+                          outlined: true,
+                          onPressed: () {
+                            _tapHaptic();
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => MeasuresRemoteScreen(client: _client),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: _RokuButton(
+                          label: 'PARTS',
+                          height: 68,
+                          outlined: true,
+                          onPressed: () {
+                            _tapHaptic();
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => PartsRemoteScreen(client: _client),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -281,7 +296,11 @@ class _RemoteControlPadScreenState extends State<RemoteControlPadScreen> {
     );
   }
 
-  void _send(String command, {Map<String, dynamic> args = const <String, dynamic>{}}) {
+  void _send(
+    String command, {
+    Map<String, dynamic> args = const <String, dynamic>{},
+  }) {
+    _tapHaptic();
     _client.sendCommandEnvelope(command, args: args);
   }
 }
@@ -302,7 +321,6 @@ class _StationModeScreenState extends State<StationModeScreen> {
   String? _attemptId;
   bool _isPracticing = false;
   bool _isPlaying = false;
-  bool _pianoOn = true;
   bool _loopEnabled = false;
   int _currentMeasure = 1;
   int _tempoPercent = 70;
@@ -315,10 +333,12 @@ class _StationModeScreenState extends State<StationModeScreen> {
   int _measureMinVisited = 1;
   int _measureMaxVisited = 1;
   bool _autoCompletedSent = false;
+  int? _lastLoopMeasure;
 
   @override
   void initState() {
     super.initState();
+    _client.addListener(_syncFromPlayerState);
     unawaited(_initialize());
   }
 
@@ -333,6 +353,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
 
   @override
   void dispose() {
+    _client.removeListener(_syncFromPlayerState);
     _tick?.cancel();
     _client.dispose();
     super.dispose();
@@ -343,106 +364,191 @@ class _StationModeScreenState extends State<StationModeScreen> {
     final profile = _client.pairedProfile;
     final configured = profile?.mode == 'station_single';
     final station = StationModeConfig.fromProfile(profile);
+    final remoteState = RokuRemoteState.fromMap(_client.latestState);
+    final displayMeasure = _isPracticing && _client.isConnected
+        ? _clampMeasure(remoteState.currentMeasure, station)
+        : _currentMeasure;
+    final displayTempo = _isPracticing && _client.isConnected
+        ? remoteState.tempoPercent
+        : _tempoPercent;
+    final displayLoop = _isPracticing && _client.isConnected
+        ? remoteState.loopEnabled
+        : _loopEnabled;
+
     return WillPopScope(
       onWillPop: () => _canReconfigure(station),
       child: AnimatedBuilder(
         animation: _client,
         builder: (context, _) {
           return Scaffold(
-          appBar: AppBar(
-            title: const Text('Station Mode'),
-            actions: [
-              IconButton(
-                tooltip: 'Configure station',
-                onPressed: () => _reconfigureStation(station),
-                icon: const Icon(Icons.qr_code_scanner),
-              ),
-            ],
-          ),
-          body: !configured
-              ? _NotConfiguredStationCard(onScan: () => _reconfigureStation(station))
-              : Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Card(
-                        color: const Color(0xFF203047),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                station.stationName.toUpperCase(),
-                                style: const TextStyle(
-                                  fontSize: 30,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                'Practice mm.${station.minMeasure}-${station.maxMeasure}',
-                                style: const TextStyle(fontSize: 20),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                _client.connectionStatus ?? 'Disconnected',
-                                style: const TextStyle(color: Colors.white70),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      if (!_isPracticing)
-                        _StationHomeCard(
-                          recentNames: _recentNames,
-                          onStart: (name) => _startStudentAttempt(station, name),
-                        ),
-                      if (_isPracticing) ...[
-                        _StationPracticeHeader(
-                          studentName: _studentName ?? '',
-                          currentMeasure: _currentMeasure,
-                          tempoPercent: _tempoPercent,
-                          loopEnabled: _loopEnabled,
-                          loopA: _loopA,
-                          loopB: _loopB,
-                        ),
-                        const SizedBox(height: 8),
-                        Expanded(
-                          child: _StationControlsCard(
-                            station: station,
-                            isPlaying: _isPlaying,
-                            loopEnabled: _loopEnabled,
-                            pianoOn: _pianoOn,
-                            onPlayPause: _togglePlayPause,
-                            onBack: () => _jumpBy(-station.navStepMeasures, station),
-                            onForward: () => _jumpBy(station.navStepMeasures, station),
-                            onTempoDown: () => _adjustTempo(-5, station),
-                            onTempoUp: () => _adjustTempo(5, station),
-                            onLoopToggle: () => _toggleLoop(station),
-                            onSetLoopA: () => _setLoopA(station),
-                            onSetLoopB: () => _setLoopB(station),
-                            onClearLoop: _clearLoop,
-                            onPianoToggle: () => _togglePiano(station),
-                            onMeasures: station.allowJumpToAnyMeasureInRange
-                                ? () => _openMeasureGrid(station)
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        ElevatedButton(
-                          onPressed: () => _finishAttempt(station, completed: true),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.deepOrange,
-                          ),
-                          child: const Text('DONE / NEXT STUDENT'),
-                        ),
-                      ],
-                    ],
+            backgroundColor: _RokuTokens.bg,
+            appBar: AppBar(
+              backgroundColor: _RokuTokens.bg,
+              title: const Text('STATION MODE'),
+              actions: [
+                TextButton(
+                  onPressed: () => _reconfigureStation(station),
+                  child: const Text(
+                    'SCAN QR',
+                    style: TextStyle(color: _RokuTokens.textPrimary),
                   ),
                 ),
+              ],
+            ),
+            body: !configured
+                ? _NotConfiguredStationCard(
+                    onScan: () => _reconfigureStation(station),
+                  )
+                : SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            station.stationName.toUpperCase(),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.w700,
+                              color: _RokuTokens.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Practice mm.${station.minMeasure}-${station.maxMeasure}',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w500,
+                              color: _RokuTokens.textSecondary,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          _StatusStrip(
+                            connected: _client.isConnected,
+                            currentMeasure: displayMeasure,
+                            tempoPercent: displayTempo,
+                            showLoop: displayLoop,
+                            disconnectedText: 'Disconnected',
+                          ),
+                          const SizedBox(height: 16),
+                          if (!_isPracticing)
+                            _StationHomePanel(
+                              recentNames: _recentNames,
+                              onStart: (name) => _startStudentAttempt(station, name),
+                            ),
+                          if (_isPracticing) ...[
+                            _RokuButton(
+                              label: _isPlaying ? 'PAUSE' : 'PLAY',
+                              height: 108,
+                              accent: true,
+                              onPressed: _togglePlayPause,
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _RokuButton(
+                                    label: 'BACK ${station.navStepMeasures}',
+                                    height: 82,
+                                    onPressed: () =>
+                                        _jumpBy(-station.navStepMeasures, station),
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: _RokuButton(
+                                    label: 'FWD ${station.navStepMeasures}',
+                                    height: 82,
+                                    onPressed: () => _jumpBy(station.navStepMeasures, station),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _RokuButton(
+                                    label: 'TEMPO -',
+                                    height: 82,
+                                    onPressed: station.allowTempoAdjust
+                                        ? () => _adjustTempo(-5, station)
+                                        : null,
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: _RokuButton(
+                                    label: 'TEMPO +',
+                                    height: 82,
+                                    onPressed: station.allowTempoAdjust
+                                        ? () => _adjustTempo(5, station)
+                                        : null,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '$displayTempo%',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w600,
+                                color: _RokuTokens.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            _RokuButton(
+                              label: 'LOOP',
+                              height: 82,
+                              selected: displayLoop,
+                              onPressed: () => _toggleLoop(station),
+                            ),
+                            if (station.allowCustomLoopPoints) ...[
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _RokuButton(
+                                      label: 'SET A',
+                                      height: 60,
+                                      onPressed: () => _setLoopA(station),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: _RokuButton(
+                                      label: 'SET B',
+                                      height: 60,
+                                      onPressed: () => _setLoopB(station),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: _RokuButton(
+                                      label: 'CLEAR',
+                                      height: 60,
+                                      onPressed: _clearLoop,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            const Spacer(),
+                            _RokuButton(
+                              label: 'DONE / NEXT STUDENT',
+                              height: 84,
+                              outlined: true,
+                              onPressed: () => _finishAttempt(station, completed: true),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
           );
         },
       ),
@@ -464,9 +570,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (paired == true) {
       _registerStationIfConfigured();
       if (mounted) {
-        setState(() {
-          _resetPracticeState();
-        });
+        setState(_resetPracticeState);
       }
     }
   }
@@ -481,6 +585,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
+          backgroundColor: _RokuTokens.card,
           title: const Text('Station Passcode'),
           content: TextField(
             controller: input,
@@ -494,24 +599,49 @@ class _StationModeScreenState extends State<StationModeScreen> {
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).pop(input.text.trim() == passcode);
-              },
+              onPressed: () => Navigator.of(context).pop(input.text.trim() == passcode),
               child: const Text('Unlock'),
             ),
           ],
         );
       },
     );
-    if (result != true) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Incorrect passcode')),
-        );
-      }
-      return false;
+    if (result == true) {
+      return true;
     }
-    return true;
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Incorrect passcode')),
+      );
+    }
+    return false;
+  }
+
+  void _syncFromPlayerState() {
+    if (!_isPracticing) {
+      return;
+    }
+    final station = StationModeConfig.fromProfile(_client.pairedProfile);
+    if (!station.isValid || !_client.isConnected) {
+      return;
+    }
+    final remote = RokuRemoteState.fromMap(_client.latestState);
+    final resolvedMeasure = _clampMeasure(remote.currentMeasure, station);
+    if (remote.loopEnabled && _lastLoopMeasure != null && resolvedMeasure < _lastLoopMeasure!) {
+      _loopReps += 1;
+    }
+    _currentMeasure = resolvedMeasure;
+    _tempoPercent = remote.tempoPercent;
+    _isPlaying = remote.isPlaying;
+    _loopEnabled = remote.loopEnabled;
+    _loopA = remote.loopA;
+    _loopB = remote.loopB;
+    _lastLoopMeasure = resolvedMeasure;
+
+    _measureMinVisited = min(_measureMinVisited, resolvedMeasure);
+    _measureMaxVisited = max(_measureMaxVisited, resolvedMeasure);
+    _tempoMinUsed = min(_tempoMinUsed, _tempoPercent);
+    _tempoMaxUsed = max(_tempoMaxUsed, _tempoPercent);
   }
 
   void _registerStationIfConfigured() {
@@ -532,16 +662,17 @@ class _StationModeScreenState extends State<StationModeScreen> {
   }
 
   void _startStudentAttempt(StationModeConfig station, String name) {
-    if (!station.isValid || name.trim().isEmpty) {
+    final trimmed = name.trim();
+    if (!station.isValid || trimmed.isEmpty) {
       return;
     }
+    _tapHaptic();
     _registerStationIfConfigured();
     final attemptId = _newAttemptId();
-    _studentName = name.trim();
+    _studentName = trimmed;
     _attemptId = attemptId;
     _isPracticing = true;
     _isPlaying = false;
-    _pianoOn = true;
     _loopEnabled = station.loopDefaultOn;
     _loopA = station.loopDefaultOn ? station.minMeasure : null;
     _loopB = station.loopDefaultOn ? station.maxMeasure : null;
@@ -554,6 +685,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     _measureMinVisited = _currentMeasure;
     _measureMaxVisited = _currentMeasure;
     _autoCompletedSent = false;
+    _lastLoopMeasure = _currentMeasure;
     _tick?.cancel();
 
     _recentNames.remove(_studentName);
@@ -581,10 +713,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     );
     _client.sendCommandEnvelope(
       'JUMP_TO_MEASURE',
-      args: <String, dynamic>{
-        'measure': _currentMeasure,
-        'autoPlay': false,
-      },
+      args: <String, dynamic>{'measure': _currentMeasure, 'autoPlay': false},
     );
     if (_loopEnabled) {
       _client.sendCommandEnvelope(
@@ -602,6 +731,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (!_isPracticing) {
       return;
     }
+    _tapHaptic();
     _isPlaying = !_isPlaying;
     if (_isPlaying) {
       _client.sendCommandEnvelope('PLAY');
@@ -619,6 +749,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (!_isPracticing || !station.navBackForwardAllowed) {
       return;
     }
+    _tapHaptic();
     final target = _currentMeasure + delta;
     final clamped = _clampMeasure(target, station);
     _currentMeasure = clamped;
@@ -626,10 +757,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     _measureMaxVisited = max(_measureMaxVisited, _currentMeasure);
     _client.sendCommandEnvelope(
       'JUMP_TO_MEASURE',
-      args: <String, dynamic>{
-        'measure': clamped,
-        'autoPlay': _isPlaying,
-      },
+      args: <String, dynamic>{'measure': clamped, 'autoPlay': _isPlaying},
     );
     if (target != clamped) {
       _showClampToast(station);
@@ -642,6 +770,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (!_isPracticing || !station.allowTempoAdjust) {
       return;
     }
+    _tapHaptic();
     _tempoPercent = (_tempoPercent + delta).clamp(
       station.tempoMinPercent,
       station.tempoMaxPercent,
@@ -660,11 +789,12 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (!_isPracticing) {
       return;
     }
+    _tapHaptic();
     _loopEnabled = !_loopEnabled;
     if (_loopEnabled) {
       final a = _loopA ?? station.minMeasure;
       final b = _loopB ?? station.maxMeasure;
-      _setLoopRange(a, b, station, countRep: false);
+      _setLoopRange(a, b, station);
     } else {
       _loopA = null;
       _loopB = null;
@@ -678,6 +808,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (!_isPracticing || !station.allowCustomLoopPoints) {
       return;
     }
+    _tapHaptic();
     _loopA = _clampMeasure(_currentMeasure, station);
     if (_loopB != null && _loopB! <= _loopA!) {
       final tmp = _loopA;
@@ -685,7 +816,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
       _loopB = tmp;
     }
     if (_loopEnabled && _loopA != null && _loopB != null) {
-      _setLoopRange(_loopA!, _loopB!, station, countRep: false);
+      _setLoopRange(_loopA!, _loopB!, station);
     }
     _sendPracticeEvent('LOOP', station: station);
     setState(() {});
@@ -695,6 +826,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (!_isPracticing || !station.allowCustomLoopPoints) {
       return;
     }
+    _tapHaptic();
     _loopB = _clampMeasure(_currentMeasure, station);
     if (_loopA != null && _loopB! <= _loopA!) {
       final tmp = _loopA;
@@ -702,13 +834,13 @@ class _StationModeScreenState extends State<StationModeScreen> {
       _loopB = tmp;
     }
     if (_loopEnabled && _loopA != null && _loopB != null) {
-      _setLoopRange(_loopA!, _loopB!, station, countRep: false);
+      _setLoopRange(_loopA!, _loopB!, station);
     }
     _sendPracticeEvent('LOOP', station: station);
     setState(() {});
   }
 
-  void _setLoopRange(int a, int b, StationModeConfig station, {required bool countRep}) {
+  void _setLoopRange(int a, int b, StationModeConfig station) {
     final aa = _clampMeasure(a, station);
     final bb = _clampMeasure(b, station);
     final start = aa <= bb ? aa : bb;
@@ -719,80 +851,18 @@ class _StationModeScreenState extends State<StationModeScreen> {
       'SET_LOOP_RANGE',
       args: <String, dynamic>{'a': start, 'b': end},
     );
-    if (countRep) {
-      _loopReps += 1;
-    }
   }
 
   void _clearLoop() {
     if (!_isPracticing) {
       return;
     }
+    _tapHaptic();
     _loopEnabled = false;
     _loopA = null;
     _loopB = null;
     _client.sendCommandEnvelope('CLEAR_LOOP');
     _sendPracticeEvent('LOOP');
-    setState(() {});
-  }
-
-  void _togglePiano(StationModeConfig station) {
-    if (!_isPracticing) {
-      return;
-    }
-    _pianoOn = !_pianoOn;
-    _sendLockedMix(station);
-    _sendPracticeEvent('MIX');
-    setState(() {});
-  }
-
-  Future<void> _openMeasureGrid(StationModeConfig station) async {
-    if (!_isPracticing) {
-      return;
-    }
-    final selected = await showModalBottomSheet<int>(
-      context: context,
-      builder: (context) {
-        final measures = <int>[
-          for (var m = station.minMeasure; m <= station.maxMeasure; m++) m,
-        ];
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: GridView.builder(
-              itemCount: measures.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 5,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-                childAspectRatio: 1.8,
-              ),
-              itemBuilder: (context, index) {
-                final measure = measures[index];
-                return ElevatedButton(
-                  onPressed: () => Navigator.of(context).pop(measure),
-                  child: Text('$measure'),
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-    if (selected == null) {
-      return;
-    }
-    _currentMeasure = _clampMeasure(selected, station);
-    _measureMinVisited = min(_measureMinVisited, _currentMeasure);
-    _measureMaxVisited = max(_measureMaxVisited, _currentMeasure);
-    _client.sendCommandEnvelope(
-      'JUMP_TO_MEASURE',
-      args: <String, dynamic>{
-        'measure': _currentMeasure,
-        'autoPlay': _isPlaying,
-      },
-    );
-    _sendPracticeEvent('JUMP', station: station);
     setState(() {});
   }
 
@@ -804,29 +874,9 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (!station.isValid) {
       return;
     }
+    _syncFromPlayerState();
     _timeOnTaskSeconds += 1;
-    if (_timeOnTaskSeconds % 2 == 0) {
-      var next = _currentMeasure + 1;
-      if (next > station.maxMeasure) {
-        if (_loopEnabled) {
-          next = _loopA ?? station.minMeasure;
-          _loopReps += 1;
-        } else {
-          next = station.maxMeasure;
-          _isPlaying = false;
-          _tick?.cancel();
-        }
-      }
-      _currentMeasure = _clampMeasure(next, station);
-      _measureMinVisited = min(_measureMinVisited, _currentMeasure);
-      _measureMaxVisited = max(_measureMaxVisited, _currentMeasure);
-    }
-
-    _sendPracticeEvent(
-      'PLAY',
-      station: station,
-      deltaSeconds: 1,
-    );
+    _sendPracticeEvent('PLAY', station: station, deltaSeconds: 1);
 
     if (_timeOnTaskSeconds >= 120 && !_autoCompletedSent) {
       _autoCompletedSent = true;
@@ -849,6 +899,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (!_isPracticing || _attemptId == null || _studentName == null) {
       return;
     }
+    _tapHaptic();
     _tick?.cancel();
     _client.sendStudentMessage(
       'PRACTICE_SUMMARY',
@@ -876,6 +927,12 @@ class _StationModeScreenState extends State<StationModeScreen> {
     );
     _resetPracticeState();
     setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        duration: Duration(seconds: 1),
+        content: Text('Saved. Next student.'),
+      ),
+    );
   }
 
   void _sendLockedMix(StationModeConfig station) {
@@ -883,7 +940,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
       'SET_PARTS_ENABLED',
       args: <String, dynamic>{
         'partsEnabledSet': <String>[station.lockedPart],
-        'pianoEnabled': _pianoOn,
+        'pianoEnabled': true,
       },
     );
   }
@@ -948,6 +1005,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     _timeOnTaskSeconds = 0;
     _loopReps = 0;
     _autoCompletedSent = false;
+    _lastLoopMeasure = null;
   }
 }
 
@@ -984,96 +1042,141 @@ class _MeasuresRemoteScreenState extends State<MeasuresRemoteScreen> {
         final shownMeasures = _byFours
             ? state.measures.where((measure) => (measure - 1) % 4 == 0).toList()
             : state.measures;
+
         return Scaffold(
-          appBar: AppBar(title: const Text('Measures')),
+          backgroundColor: _RokuTokens.bg,
+          appBar: AppBar(
+            backgroundColor: _RokuTokens.bg,
+            leadingWidth: 108,
+            leading: TextButton(
+              onPressed: () => Navigator.of(context).maybePop(),
+              child: const Text(
+                '< Remote',
+                style: TextStyle(color: _RokuTokens.textPrimary),
+              ),
+            ),
+            title: const Text('MEASURES'),
+          ),
           body: Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(20),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _searchController,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(labelText: 'Measure number'),
+                SizedBox(
+                  height: 56,
+                  child: TextField(
+                    controller: _searchController,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: _RokuTokens.textPrimary,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Go to measure...',
+                      hintStyle: const TextStyle(color: _RokuTokens.textSecondary),
+                      filled: true,
+                      fillColor: _RokuTokens.card,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(18),
+                        borderSide: const BorderSide(color: _RokuTokens.border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(18),
+                        borderSide: const BorderSide(color: _RokuTokens.border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(18),
+                        borderSide: const BorderSide(color: _RokuTokens.accent),
+                      ),
+                      suffixIcon: TextButton(
+                        onPressed: () {
+                          final value = int.tryParse(_searchController.text.trim());
+                          if (value == null) {
+                            return;
+                          }
+                          _jumpTo(value);
+                        },
+                        child: const Text('GO'),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () {
-                        final value = int.tryParse(_searchController.text.trim());
-                        if (value == null) {
-                          return;
-                        }
-                        _jumpTo(value);
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    _RokuPillToggle(
+                      label: 'BY 4s',
+                      value: _byFours,
+                      onChanged: (value) {
+                        _tapHaptic();
+                        setState(() => _byFours = value);
                       },
-                      child: const Text('Go'),
+                    ),
+                    const SizedBox(width: 12),
+                    _RokuPillToggle(
+                      label: 'AUTO PLAY',
+                      value: _autoPlayOnJump,
+                      onChanged: (value) {
+                        _tapHaptic();
+                        setState(() => _autoPlayOnJump = value);
+                      },
                     ),
                   ],
                 ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('By 4s'),
-                  value: _byFours,
-                  onChanged: (value) => setState(() => _byFours = value),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Auto-Play on Jump'),
-                  value: _autoPlayOnJump,
-                  onChanged: (value) => setState(() => _autoPlayOnJump = value),
-                ),
+                const SizedBox(height: 12),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    _smallJumpButton(state.currentMeasure, -50),
-                    _smallJumpButton(state.currentMeasure, -10),
-                    _smallJumpButton(state.currentMeasure, 10),
-                    _smallJumpButton(state.currentMeasure, 50),
+                    _quickJump(state.currentMeasure, -50),
+                    _quickJump(state.currentMeasure, -10),
+                    _quickJump(state.currentMeasure, 10),
+                    _quickJump(state.currentMeasure, 50),
                   ],
                 ),
+                const SizedBox(height: 12),
+                const Text('Recent', style: _RokuTokens.status),
                 const SizedBox(height: 8),
-                const Text(
-                  'Recent',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                SizedBox(
+                  height: 48,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _recentMeasures.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final measure = _recentMeasures[index];
+                      return _RokuChipButton(
+                        label: '$measure',
+                        onPressed: () => _jumpTo(measure),
+                      );
+                    },
+                  ),
                 ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: _recentMeasures
-                      .map(
-                        (measure) => ActionChip(
-                          label: Text('$measure'),
-                          onPressed: () => _jumpTo(measure),
-                        ),
-                      )
-                      .toList(),
-                ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
                 Expanded(
                   child: shownMeasures.isEmpty
-                      ? const Center(child: Text('No measure list yet.'))
+                      ? const Center(
+                          child: Text(
+                            'No measure list yet.',
+                            style: _RokuTokens.statusSecondary,
+                          ),
+                        )
                       : GridView.builder(
                           itemCount: shownMeasures.length,
                           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                             crossAxisCount: 4,
-                            mainAxisSpacing: 8,
-                            crossAxisSpacing: 8,
-                            childAspectRatio: 1.8,
+                            mainAxisSpacing: 12,
+                            crossAxisSpacing: 12,
+                            childAspectRatio: 1,
                           ),
                           itemBuilder: (context, index) {
                             final measure = shownMeasures[index];
                             final active = measure == state.currentMeasure;
-                            return ElevatedButton(
+                            return _RokuMeasureCell(
+                              measure: measure,
+                              active: active,
                               onPressed: () => _jumpTo(measure),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: active ? Colors.teal : null,
-                              ),
-                              child: Text('$measure'),
                             );
                           },
                         ),
@@ -1086,15 +1189,16 @@ class _MeasuresRemoteScreenState extends State<MeasuresRemoteScreen> {
     );
   }
 
-  Widget _smallJumpButton(int current, int delta) {
+  Widget _quickJump(int current, int delta) {
     final label = delta > 0 ? '+$delta' : '$delta';
-    return ElevatedButton(
+    return _RokuChipButton(
+      label: label,
       onPressed: () => _jumpTo(current + delta),
-      child: Text(label),
     );
   }
 
   void _jumpTo(int measure) {
+    _tapHaptic();
     widget.client.sendCommandEnvelope(
       'JUMP_TO_MEASURE',
       args: <String, dynamic>{
@@ -1136,38 +1240,84 @@ class _PartsRemoteScreenState extends State<PartsRemoteScreen> {
         final enabled = state.partsEnabled.toSet();
         _syncVoiceOrder(enabled);
         return Scaffold(
-          appBar: AppBar(title: const Text('Parts')),
+          backgroundColor: _RokuTokens.bg,
+          appBar: AppBar(
+            backgroundColor: _RokuTokens.bg,
+            leadingWidth: 108,
+            leading: TextButton(
+              onPressed: () => Navigator.of(context).maybePop(),
+              child: const Text(
+                '< Remote',
+                style: TextStyle(color: _RokuTokens.textPrimary),
+              ),
+            ),
+            title: const Text('PARTS'),
+          ),
           body: Padding(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(20),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                ElevatedButton(
+                _RokuButton(
+                  label: 'ALL',
+                  height: 78,
+                  selected: enabled.containsAll(_voiceParts) && enabled.contains('PIANO'),
                   onPressed: () {
+                    _tapHaptic();
                     widget.client.sendCommandEnvelope(
                       'SET_MIX_PRESET',
                       args: const <String, dynamic>{'preset': 'ALL'},
                     );
                     _voiceSelectionOrder.clear();
                   },
-                  child: const Text('All'),
                 ),
                 const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _partToggleChip('PIANO', enabled.contains('PIANO')),
-                    _partToggleChip('SOP', enabled.contains('SOP')),
-                    _partToggleChip('ALTO', enabled.contains('ALTO')),
-                    _partToggleChip('TENOR', enabled.contains('TENOR')),
-                    _partToggleChip('BASS', enabled.contains('BASS')),
-                  ],
+                _RokuButton(
+                  label: 'PIANO',
+                  height: 78,
+                  selected: enabled.contains('PIANO'),
+                  onPressed: () => _onPartTapped('PIANO'),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: GridView.count(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 2.1,
+                    children: [
+                      _RokuButton(
+                        label: 'SOPRANO',
+                        height: 78,
+                        selected: enabled.contains('SOP'),
+                        onPressed: () => _onPartTapped('SOP'),
+                      ),
+                      _RokuButton(
+                        label: 'ALTO',
+                        height: 78,
+                        selected: enabled.contains('ALTO'),
+                        onPressed: () => _onPartTapped('ALTO'),
+                      ),
+                      _RokuButton(
+                        label: 'TENOR',
+                        height: 78,
+                        selected: enabled.contains('TENOR'),
+                        onPressed: () => _onPartTapped('TENOR'),
+                      ),
+                      _RokuButton(
+                        label: 'BASS',
+                        height: 78,
+                        selected: enabled.contains('BASS'),
+                        onPressed: () => _onPartTapped('BASS'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
                 const Text(
-                  'Rule: max two voice parts selected at once.',
-                  style: TextStyle(color: Colors.white70),
+                  'Select up to two parts.',
+                  textAlign: TextAlign.center,
+                  style: _RokuTokens.smallLabel,
                 ),
               ],
             ),
@@ -1177,24 +1327,8 @@ class _PartsRemoteScreenState extends State<PartsRemoteScreen> {
     );
   }
 
-  Widget _partToggleChip(String part, bool selected) {
-    final label = switch (part) {
-      'PIANO' => 'Piano',
-      'SOP' => 'Sop',
-      'ALTO' => 'Alto',
-      'TENOR' => 'Tenor',
-      'BASS' => 'Bass',
-      _ => part,
-    };
-    return FilterChip(
-      label: Text(label),
-      selected: selected,
-      selectedColor: Colors.green,
-      onSelected: (_) => _onPartTapped(part),
-    );
-  }
-
   void _onPartTapped(String part) {
+    _tapHaptic();
     final state = RokuRemoteState.fromMap(widget.client.latestState);
     final currentlyEnabled = state.partsEnabled.toSet();
     final voices = currentlyEnabled.where(_voiceParts.contains).toSet();
@@ -1202,27 +1336,25 @@ class _PartsRemoteScreenState extends State<PartsRemoteScreen> {
 
     if (part == 'PIANO') {
       pianoEnabled = !pianoEnabled;
+    } else if (voices.contains(part)) {
+      voices.remove(part);
+      _voiceSelectionOrder.remove(part);
     } else {
-      if (voices.contains(part)) {
-        voices.remove(part);
-        _voiceSelectionOrder.remove(part);
-      } else {
-        if (voices.length >= 2) {
-          String? oldest;
-          for (final value in _voiceSelectionOrder) {
-            if (voices.contains(value)) {
-              oldest = value;
-              break;
-            }
+      if (voices.length >= 2) {
+        String? oldest;
+        for (final value in _voiceSelectionOrder) {
+          if (voices.contains(value)) {
+            oldest = value;
+            break;
           }
-          oldest ??= voices.first;
-          voices.remove(oldest);
-          _voiceSelectionOrder.remove(oldest);
         }
-        voices.add(part);
-        _voiceSelectionOrder.remove(part);
-        _voiceSelectionOrder.add(part);
+        oldest ??= voices.first;
+        voices.remove(oldest);
+        _voiceSelectionOrder.remove(oldest);
       }
+      voices.add(part);
+      _voiceSelectionOrder.remove(part);
+      _voiceSelectionOrder.add(part);
     }
 
     widget.client.sendCommandEnvelope(
@@ -1260,16 +1392,98 @@ class PairDeviceScreen extends StatefulWidget {
 }
 
 class _PairDeviceScreenState extends State<PairDeviceScreen> {
+  bool _showScanner = false;
   bool _processing = false;
   String? _message;
+  String? _error;
 
   @override
   Widget build(BuildContext context) {
+    final title = widget.requiredMode == 'station_single' ? 'PAIR STATION' : 'PAIR REMOTE';
     return Scaffold(
-      appBar: AppBar(title: const Text('Pair Device')),
-      body: Column(
-        children: [
-          Expanded(
+      backgroundColor: _RokuTokens.bg,
+      appBar: AppBar(
+        backgroundColor: _RokuTokens.bg,
+        title: Text(title),
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: _showScanner ? _buildScannerView() : _buildPairStartView(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPairStartView() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Spacer(),
+        Text(
+          widget.requiredMode == 'station_single' ? 'PAIR STATION' : 'PAIR REMOTE',
+          textAlign: TextAlign.center,
+          style: _RokuTokens.title,
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'Scan the QR shown on the iPad Player.',
+          textAlign: TextAlign.center,
+          style: _RokuTokens.statusSecondary,
+        ),
+        const SizedBox(height: 22),
+        _RokuButton(
+          label: 'SCAN QR',
+          height: 102,
+          accent: true,
+          onPressed: () {
+            _tapHaptic();
+            setState(() {
+              _showScanner = true;
+              _processing = false;
+              _error = null;
+              _message = 'Point camera at QR code.';
+            });
+          },
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 16),
+          Text(
+            _error!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: _RokuTokens.danger,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 12),
+          _RokuButton(
+            label: 'TRY AGAIN',
+            height: 72,
+            onPressed: () {
+              _tapHaptic();
+              setState(() {
+                _error = null;
+                _showScanner = true;
+                _message = 'Point camera at QR code.';
+              });
+            },
+          ),
+        ],
+        const Spacer(),
+      ],
+    );
+  }
+
+  Widget _buildScannerView() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: SizedBox(
+            height: 380,
             child: MobileScanner(
               onDetect: (capture) {
                 if (_processing || capture.barcodes.isEmpty) {
@@ -1279,26 +1493,41 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                 if (raw == null || raw.isEmpty) {
                   return;
                 }
-                _handleQrPayload(raw);
+                unawaited(_handleQrPayload(raw));
               },
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(
-              _message ?? 'Scan QR on iPad Player.',
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          _message ?? 'Point camera at QR code.',
+          textAlign: TextAlign.center,
+          style: _RokuTokens.statusSecondary,
+        ),
+        const SizedBox(height: 12),
+        _RokuButton(
+          label: _processing ? 'CONNECTING...' : 'CANCEL',
+          height: 70,
+          outlined: true,
+          onPressed: _processing
+              ? null
+              : () {
+                  _tapHaptic();
+                  setState(() {
+                    _showScanner = false;
+                    _message = null;
+                  });
+                },
+        ),
+      ],
     );
   }
 
   Future<void> _handleQrPayload(String raw) async {
     setState(() {
       _processing = true;
-      _message = 'Pairing...';
+      _message = 'Connecting...';
+      _error = null;
     });
     try {
       final decoded = jsonDecode(raw);
@@ -1308,19 +1537,42 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       final map = decoded.cast<String, dynamic>();
       final requiredMode = widget.requiredMode;
       if (requiredMode != null && map['mode']?.toString() != requiredMode) {
-        throw FormatException('Expected QR mode "$requiredMode"');
+        throw FormatException('Expected $requiredMode QR.');
       }
       await widget.client.pairFromPayload(map);
+      final connected = await _waitForConnection();
+      if (!connected) {
+        throw const FormatException(
+          'Player not found. Make sure both devices are on the same Wi-Fi.',
+        );
+      }
+      _successHaptic();
       if (!mounted) {
         return;
       }
       Navigator.of(context).pop(true);
-    } catch (error) {
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _processing = false;
-        _message = 'Pairing failed: $error';
+        _showScanner = false;
+        _message = null;
+        _error = 'Player not found. Make sure both devices are on the same Wi-Fi.';
       });
     }
+  }
+
+  Future<bool> _waitForConnection() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 4));
+    while (DateTime.now().isBefore(deadline)) {
+      if (widget.client.isConnected) {
+        return true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    return widget.client.isConnected;
   }
 }
 
@@ -1334,34 +1586,42 @@ class _NotConfiguredStationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Station not configured',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 10),
-              const Text('Scan a Station QR from the iPad Teacher setup.'),
-              const SizedBox(height: 12),
-              ElevatedButton.icon(
-                onPressed: onScan,
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Scan Station QR'),
-              ),
-            ],
-          ),
+      child: Container(
+        decoration: BoxDecoration(
+          color: _RokuTokens.card,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _RokuTokens.border),
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Station not configured',
+              style: _RokuTokens.title,
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Scan a Station QR from the iPad Teacher setup.',
+              textAlign: TextAlign.center,
+              style: _RokuTokens.statusSecondary,
+            ),
+            const SizedBox(height: 16),
+            _RokuButton(
+              label: 'SCAN STATION QR',
+              height: 92,
+              accent: true,
+              onPressed: onScan,
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _StationHomeCard extends StatelessWidget {
-  const _StationHomeCard({
+class _StationHomePanel extends StatelessWidget {
+  const _StationHomePanel({
     required this.recentNames,
     required this.onStart,
   });
@@ -1371,244 +1631,307 @@ class _StationHomeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final controller = TextEditingController();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ElevatedButton(
-              onPressed: () async {
-                final name = await showDialog<String>(
-                  context: context,
-                  builder: (context) {
-                    return AlertDialog(
-                      title: const Text("I'm Starting"),
-                      content: TextField(
-                        controller: controller,
-                        decoration: const InputDecoration(labelText: 'Student name'),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('Cancel'),
-                        ),
-                        ElevatedButton(
-                          onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-                          child: const Text('Start'),
-                        ),
-                      ],
-                    );
-                  },
-                );
-                if (name != null && name.trim().isNotEmpty) {
-                  onStart(name.trim());
-                }
-              },
-              style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 70)),
-              child: const Text("I'M STARTING"),
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _RokuButton(
+            label: "I'M STARTING",
+            height: 110,
+            accent: true,
+            onPressed: () async {
+              final name = await _promptStudentName(context);
+              if (name != null && name.trim().isNotEmpty) {
+                onStart(name.trim());
+              }
+            },
+          ),
+          if (recentNames.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            const Text('Recent names', style: _RokuTokens.status),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: recentNames
+                  .map(
+                    (name) => _RokuChipButton(
+                      label: name,
+                      onPressed: () => onStart(name),
+                    ),
+                  )
+                  .toList(),
             ),
-            if (recentNames.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              const Text('Recent names'),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: recentNames
-                    .map(
-                      (name) => ActionChip(
-                        label: Text(name),
-                        onPressed: () => onStart(name),
-                      ),
-                    )
-                    .toList(),
-              ),
-            ],
           ],
-        ),
+        ],
       ),
+    );
+  }
+
+  Future<String?> _promptStudentName(BuildContext context) async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: _RokuTokens.card,
+          title: const Text("I'm Starting"),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'Student name',
+              hintText: 'First + last initial',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+              child: const Text('Start'),
+            ),
+          ],
+        );
+      },
     );
   }
 }
 
-class _StationPracticeHeader extends StatelessWidget {
-  const _StationPracticeHeader({
-    required this.studentName,
+class _StatusStrip extends StatelessWidget {
+  const _StatusStrip({
+    required this.connected,
     required this.currentMeasure,
     required this.tempoPercent,
-    required this.loopEnabled,
-    required this.loopA,
-    required this.loopB,
+    required this.showLoop,
+    required this.disconnectedText,
   });
 
-  final String studentName;
+  final bool connected;
   final int currentMeasure;
   final int tempoPercent;
-  final bool loopEnabled;
-  final int? loopA;
-  final int? loopB;
+  final bool showLoop;
+  final String disconnectedText;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Wrap(
-          spacing: 12,
-          runSpacing: 6,
-          children: [
-            Text(
-              studentName,
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-            ),
-            Text('Measure $currentMeasure'),
-            Text('Tempo $tempoPercent%'),
-            Text(
-              loopEnabled
-                  ? 'Loop ${loopA?.toString() ?? '-'}-${loopB?.toString() ?? '-'}'
-                  : 'Loop Off',
-            ),
-          ],
+    return Container(
+      height: 50,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: _RokuTokens.border),
         ),
       ),
-    );
-  }
-}
-
-class _StationControlsCard extends StatelessWidget {
-  const _StationControlsCard({
-    required this.station,
-    required this.isPlaying,
-    required this.loopEnabled,
-    required this.pianoOn,
-    required this.onPlayPause,
-    required this.onBack,
-    required this.onForward,
-    required this.onTempoDown,
-    required this.onTempoUp,
-    required this.onLoopToggle,
-    required this.onSetLoopA,
-    required this.onSetLoopB,
-    required this.onClearLoop,
-    required this.onPianoToggle,
-    this.onMeasures,
-  });
-
-  final StationModeConfig station;
-  final bool isPlaying;
-  final bool loopEnabled;
-  final bool pianoOn;
-  final VoidCallback onPlayPause;
-  final VoidCallback onBack;
-  final VoidCallback onForward;
-  final VoidCallback onTempoDown;
-  final VoidCallback onTempoUp;
-  final VoidCallback onLoopToggle;
-  final VoidCallback onSetLoopA;
-  final VoidCallback onSetLoopB;
-  final VoidCallback onClearLoop;
-  final VoidCallback onPianoToggle;
-  final VoidCallback? onMeasures;
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Wrap(
-        spacing: 10,
-        runSpacing: 10,
+      child: Row(
         children: [
-          _BigRemoteButton(
-            label: isPlaying ? 'Pause' : 'Play',
-            icon: isPlaying ? Icons.pause : Icons.play_arrow,
-            color: isPlaying ? Colors.orange : Colors.green,
-            onTap: onPlayPause,
-          ),
-          _BigRemoteButton(
-            label: 'Back ${station.navStepMeasures}',
-            icon: Icons.skip_previous,
-            onTap: onBack,
-          ),
-          _BigRemoteButton(
-            label: 'Forward ${station.navStepMeasures}',
-            icon: Icons.skip_next,
-            onTap: onForward,
-          ),
-          _BigRemoteButton(
-            label: 'Tempo -',
-            icon: Icons.remove,
-            onTap: station.allowTempoAdjust ? onTempoDown : () {},
-            color: station.allowTempoAdjust ? null : Colors.blueGrey,
-          ),
-          _BigRemoteButton(
-            label: 'Tempo +',
-            icon: Icons.add,
-            onTap: station.allowTempoAdjust ? onTempoUp : () {},
-            color: station.allowTempoAdjust ? null : Colors.blueGrey,
-          ),
-          _BigRemoteButton(
-            label: loopEnabled ? 'Loop On' : 'Loop Off',
-            icon: Icons.repeat,
-            onTap: onLoopToggle,
-          ),
-          _BigRemoteButton(
-            label: 'Set Loop A',
-            icon: Icons.looks_one,
-            onTap: station.allowCustomLoopPoints ? onSetLoopA : () {},
-            color: station.allowCustomLoopPoints ? null : Colors.blueGrey,
-          ),
-          _BigRemoteButton(
-            label: 'Set Loop B',
-            icon: Icons.looks_two,
-            onTap: station.allowCustomLoopPoints ? onSetLoopB : () {},
-            color: station.allowCustomLoopPoints ? null : Colors.blueGrey,
-          ),
-          _BigRemoteButton(
-            label: 'Clear Loop',
-            icon: Icons.clear,
-            onTap: onClearLoop,
-          ),
-          _BigRemoteButton(
-            label: pianoOn ? 'Piano On' : 'Piano Off',
-            icon: Icons.piano,
-            onTap: onPianoToggle,
-          ),
-          if (onMeasures != null)
-            _BigRemoteButton(
-              label: 'Measures',
-              icon: Icons.grid_view,
-              onTap: onMeasures!,
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: connected ? _RokuTokens.success : _RokuTokens.danger,
+              shape: BoxShape.circle,
             ),
+          ),
+          const SizedBox(width: 10),
+          if (connected) ...[
+            Text('m. $currentMeasure', style: _RokuTokens.status),
+            const SizedBox(width: 16),
+            Text('$tempoPercent%', style: _RokuTokens.status),
+            const SizedBox(width: 12),
+            if (showLoop)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _RokuTokens.accent,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Text(
+                  'Loop',
+                  style: TextStyle(
+                    color: _RokuTokens.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+          ] else ...[
+            Text(disconnectedText, style: _RokuTokens.statusSecondary),
+          ],
         ],
       ),
     );
   }
 }
 
-class _BigRemoteButton extends StatelessWidget {
-  const _BigRemoteButton({
+class _RokuButton extends StatelessWidget {
+  const _RokuButton({
     required this.label,
-    required this.icon,
-    required this.onTap,
-    this.color,
+    required this.height,
+    required this.onPressed,
+    this.accent = false,
+    this.selected = false,
+    this.outlined = false,
   });
 
   final String label;
-  final IconData icon;
-  final VoidCallback onTap;
-  final Color? color;
+  final double height;
+  final VoidCallback? onPressed;
+  final bool accent;
+  final bool selected;
+  final bool outlined;
 
   @override
   Widget build(BuildContext context) {
-    return ElevatedButton.icon(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color,
-        minimumSize: const Size(240, 70),
+    final enabled = onPressed != null;
+    final background = !enabled
+        ? _RokuTokens.card.withOpacity(0.45)
+        : (accent || selected)
+            ? _RokuTokens.accent
+            : _RokuTokens.card;
+    final border = outlined || (!accent && !selected)
+        ? const BorderSide(color: _RokuTokens.border)
+        : BorderSide.none;
+    return SizedBox(
+      height: height,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: background,
+          foregroundColor: _RokuTokens.textPrimary,
+          disabledBackgroundColor: _RokuTokens.card.withOpacity(0.45),
+          disabledForegroundColor: _RokuTokens.textSecondary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(_RokuTokens.radius),
+            side: border,
+          ),
+          textStyle: _RokuTokens.buttonLabel,
+          minimumSize: const Size(80, 60),
+          elevation: 0,
+        ).copyWith(
+          overlayColor: MaterialStatePropertyAll(
+            _RokuTokens.textPrimary.withOpacity(0.08),
+          ),
+        ),
+        onPressed: onPressed,
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
       ),
-      onPressed: onTap,
-      icon: Icon(icon, size: 24),
-      label: Text(label, style: const TextStyle(fontSize: 20)),
+    );
+  }
+}
+
+class _RokuChipButton extends StatelessWidget {
+  const _RokuChipButton({
+    required this.label,
+    required this.onPressed,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 46,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: _RokuTokens.card,
+          foregroundColor: _RokuTokens.textPrimary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: _RokuTokens.border),
+          ),
+          elevation: 0,
+          textStyle: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        onPressed: () {
+          _tapHaptic();
+          onPressed();
+        },
+        child: Text(label),
+      ),
+    );
+  }
+}
+
+class _RokuMeasureCell extends StatelessWidget {
+  const _RokuMeasureCell({
+    required this.measure,
+    required this.active,
+    required this.onPressed,
+  });
+
+  final int measure;
+  final bool active;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return ElevatedButton(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: active ? _RokuTokens.accent : _RokuTokens.card,
+        foregroundColor: _RokuTokens.textPrimary,
+        elevation: 0,
+        minimumSize: const Size(70, 70),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: _RokuTokens.border),
+        ),
+      ),
+      onPressed: () {
+        _tapHaptic();
+        onPressed();
+      },
+      child: Text(
+        '$measure',
+        style: const TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _RokuPillToggle extends StatelessWidget {
+  const _RokuPillToggle({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 44,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: value ? _RokuTokens.accent : _RokuTokens.card,
+          foregroundColor: _RokuTokens.textPrimary,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(999),
+            side: const BorderSide(color: _RokuTokens.border),
+          ),
+          textStyle: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        onPressed: () => onChanged(!value),
+        child: Text(label),
+      ),
     );
   }
 }
@@ -1710,16 +2033,6 @@ class RokuRemoteState {
   final Set<String> partsEnabled;
   final List<int> measures;
 
-  String get loopLabel {
-    if (loopEnabled) {
-      return 'Loop $loopA-$loopB';
-    }
-    if (loopArmed) {
-      return 'Loop Armed';
-    }
-    return 'Loop Off';
-  }
-
   factory RokuRemoteState.fromMap(Map<String, dynamic>? raw) {
     if (raw == null) {
       return RokuRemoteState.empty();
@@ -1758,6 +2071,56 @@ class RokuRemoteState {
     partsEnabled: const <String>{'SOP', 'ALTO', 'TENOR', 'BASS', 'PIANO'},
     measures: const <int>[],
   );
+}
+
+class _RokuTokens {
+  static const Color bg = Color(0xFF15181D);
+  static const Color card = Color(0xFF1E232B);
+  static const Color textPrimary = Color(0xFFFFFFFF);
+  static const Color textSecondary = Color.fromRGBO(255, 255, 255, 0.70);
+  static const Color border = Color.fromRGBO(255, 255, 255, 0.12);
+  static const Color accent = Color(0xFF6E5BFF);
+  static const Color danger = Color(0xFFFF4D4D);
+  static const Color success = Color(0xFF3DDC84);
+
+  static const double radius = 20;
+
+  static const TextStyle title = TextStyle(
+    fontSize: 24,
+    fontWeight: FontWeight.w600,
+    color: textPrimary,
+  );
+
+  static const TextStyle status = TextStyle(
+    fontSize: 15,
+    fontWeight: FontWeight.w500,
+    color: textPrimary,
+  );
+
+  static const TextStyle statusSecondary = TextStyle(
+    fontSize: 15,
+    fontWeight: FontWeight.w500,
+    color: textSecondary,
+  );
+
+  static const TextStyle buttonLabel = TextStyle(
+    fontSize: 19,
+    fontWeight: FontWeight.w600,
+  );
+
+  static const TextStyle smallLabel = TextStyle(
+    fontSize: 14,
+    fontWeight: FontWeight.w500,
+    color: textSecondary,
+  );
+}
+
+void _tapHaptic() {
+  unawaited(HapticFeedback.selectionClick());
+}
+
+void _successHaptic() {
+  unawaited(HapticFeedback.lightImpact());
 }
 
 int? _toInt(Object? value) {
