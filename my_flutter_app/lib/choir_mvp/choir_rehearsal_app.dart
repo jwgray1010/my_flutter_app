@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import 'models.dart';
 import 'networking.dart';
 import 'rehearsal_controller.dart';
+import 'remote_roku_ui.dart';
 import 'voice_commands.dart';
 import 'voice_help_screen.dart';
 import 'voice_ptt_service.dart';
@@ -98,7 +101,7 @@ class RoleSelectionScreen extends StatelessWidget {
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) => const PhoneRemoteScreen(),
+                            builder: (_) => const RokuRemoteScreen(),
                           ),
                         );
                       },
@@ -234,6 +237,11 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                 },
                 icon: const Icon(Icons.help_outline),
               ),
+              IconButton(
+                tooltip: 'Pair remote (QR)',
+                onPressed: _showPairingQrSheet,
+                icon: const Icon(Icons.qr_code),
+              ),
               if (_isPttListening || _isPttProcessing)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
@@ -281,6 +289,11 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                       onPressed: _controller.loadMusicXmlFromPicker,
                       icon: const Icon(Icons.upload_file),
                       label: const Text('Load MusicXML'),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: _showPairingQrSheet,
+                      icon: const Icon(Icons.qr_code),
+                      label: const Text('Pair Remote'),
                     ),
                     Text(
                       _controller.loadedFileName ?? 'No score loaded',
@@ -460,6 +473,48 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
       return;
     }
     _controller.jumpToMeasure(measure);
+  }
+
+  Future<void> _showPairingQrSheet() async {
+    final payload = await _controller.pairingPayload();
+    if (!mounted) {
+      return;
+    }
+    final qrData = jsonEncode(payload);
+    final pretty = const JsonEncoder.withIndent('  ').convert(payload);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Pair Remote',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                QrImageView(
+                  data: qrData,
+                  version: QrVersions.auto,
+                  size: 260,
+                  foregroundColor: Colors.white,
+                  backgroundColor: Colors.black,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  pretty,
+                  style: const TextStyle(fontSize: 12, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   double get _minimumConfidence => _choirRoomMode ? 0.62 : 0.35;

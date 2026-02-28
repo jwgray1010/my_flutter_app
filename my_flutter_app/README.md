@@ -47,3 +47,18 @@ Voice control is push-to-talk only (no always-listening mode).
 - Uses Apple Speech framework on iOS (`en-US`).
 - Prefers on-device recognition when available.
 - All commands are deterministic and mapped to the local command bus.
+
+## Roku-Style Remote (iPhone) Pairing
+
+1. On iPad **Main Player**, tap **Pair Remote**.
+2. A QR payload is shown with local IP, port, and token.
+3. On iPhone **Remote**, tap the QR scan icon and scan the code.
+4. Remote stores the pairing profile and auto-reconnects on next launch.
+
+### Remote command transport
+
+- Local LAN only (WebSocket).
+- Message envelope:
+  - Remote -> Player: `{ "type":"COMMAND", "command":"...", "args":{...} }`
+  - Player -> Remote: `{ "type":"STATE", "payload":{...} }`
+- Token mismatch is rejected by player.

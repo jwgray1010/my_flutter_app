@@ -1,178 +1,428 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-typedef CommandHandler = void Function(Map<String, dynamic> command);
+typedef CommandHandler = FutureOr<void> Function(Map<String, dynamic> command);
 typedef StateSnapshotBuilder = Map<String, dynamic> Function();
+typedef PlayerNameBuilder = String Function();
 
 class LocalPlayerServer {
   LocalPlayerServer({
-    this.commandPort = 45454,
-    this.announcePort = 45455,
+    this.port = 8743,
   });
 
-  final int commandPort;
-  final int announcePort;
+  final int port;
+  String _pairToken = '';
 
-  ServerSocket? _commandServer;
-  RawDatagramSocket? _announceSocket;
-  Timer? _announceTimer;
-  final List<Socket> _clients = [];
-
+  HttpServer? _httpServer;
+  final Set<WebSocket> _authedClients = <WebSocket>{};
   CommandHandler? _commandHandler;
   StateSnapshotBuilder? _stateSnapshotBuilder;
+  PlayerNameBuilder? _playerNameBuilder;
+  Timer? _stateTickTimer;
+  String _lastKnownIp = '127.0.0.1';
 
-  bool get isRunning => _commandServer != null;
+  bool get isRunning => _httpServer != null;
+
+  // Compatibility with previous API.
+  int get commandPort => port;
+  int get announcePort => 0;
 
   Future<void> start({
     required CommandHandler onCommand,
     required StateSnapshotBuilder stateBuilder,
+    PlayerNameBuilder? playerNameBuilder,
   }) async {
     if (isRunning) {
       return;
     }
     _commandHandler = onCommand;
     _stateSnapshotBuilder = stateBuilder;
+    _playerNameBuilder = playerNameBuilder;
+    _pairToken = await _loadOrCreateServerToken();
 
-    _commandServer = await ServerSocket.bind(
+    _httpServer = await HttpServer.bind(
       InternetAddress.anyIPv4,
-      commandPort,
+      port,
       shared: true,
     );
-    _commandServer!.listen(
-      _handleClient,
+    _httpServer!.listen(
+      _handleHttpRequest,
       onError: (_) {},
       onDone: () {},
     );
 
-    _announceSocket = await RawDatagramSocket.bind(
-      InternetAddress.anyIPv4,
-      0,
-      reuseAddress: true,
-      reusePort: true,
+    _lastKnownIp = await _resolveLanIp();
+    _stateTickTimer = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => _broadcastStateWhilePlaying(),
     );
-    _announceSocket!.broadcastEnabled = true;
-    _announceTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _broadcastAnnouncement(),
-    );
-    _broadcastAnnouncement();
+  }
+
+  Future<Map<String, dynamic>> buildPairingPayload() async {
+    if (isRunning) {
+      _lastKnownIp = await _resolveLanIp();
+    }
+    return <String, dynamic>{
+      'name': _playerNameBuilder?.call() ?? 'ChoirPlayer-iPad',
+      'ip': _lastKnownIp,
+      'port': port,
+      'token': _pairToken,
+    };
   }
 
   void broadcastState() {
-    if (_clients.isEmpty) {
-      return;
-    }
     final builder = _stateSnapshotBuilder;
-    if (builder == null) {
+    if (builder == null || _authedClients.isEmpty) {
       return;
     }
-    final line = '${jsonEncode(builder())}\n';
-    final disconnected = <Socket>[];
-    for (final client in _clients) {
-      try {
-        client.write(line);
-      } catch (_) {
-        disconnected.add(client);
-      }
-    }
-    for (final dead in disconnected) {
-      _removeClient(dead);
-    }
+    final message = <String, dynamic>{
+      'type': 'STATE',
+      'payload': builder(),
+    };
+    _broadcastJson(message);
   }
 
   Future<void> stop() async {
-    _announceTimer?.cancel();
-    _announceTimer = null;
-    _announceSocket?.close();
-    _announceSocket = null;
+    _stateTickTimer?.cancel();
+    _stateTickTimer = null;
 
-    final clients = _clients.toList();
-    _clients.clear();
-    for (final client in clients) {
+    final sockets = _authedClients.toList();
+    _authedClients.clear();
+    for (final socket in sockets) {
       try {
-        await client.close();
+        await socket.close();
       } catch (_) {}
     }
 
-    final server = _commandServer;
-    _commandServer = null;
+    final server = _httpServer;
+    _httpServer = null;
     if (server != null) {
-      await server.close();
+      await server.close(force: true);
     }
   }
 
-  void _handleClient(Socket socket) {
-    socket.setOption(SocketOption.tcpNoDelay, true);
-    _clients.add(socket);
-    _sendStateTo(socket);
-
-    socket
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(
-          (line) => _handleClientLine(line),
-          onError: (_) => _removeClient(socket),
-          onDone: () => _removeClient(socket),
-          cancelOnError: true,
-        );
-  }
-
-  void _handleClientLine(String line) {
-    final handler = _commandHandler;
-    if (handler == null || line.trim().isEmpty) {
+  Future<void> _handleHttpRequest(HttpRequest request) async {
+    if (request.uri.path == '/ws' && WebSocketTransformer.isUpgradeRequest(request)) {
+      final socket = await WebSocketTransformer.upgrade(request);
+      _handleWebSocket(socket);
       return;
     }
+
+    request.response
+      ..statusCode = HttpStatus.ok
+      ..headers.contentType = ContentType.text
+      ..write('Choir Player Server')
+      ..close();
+  }
+
+  void _handleWebSocket(WebSocket socket) {
+    var authenticated = false;
+
+    socket.listen(
+      (event) async {
+        final decoded = _decodeMap(event);
+        if (decoded == null) {
+          return;
+        }
+
+        if (!authenticated) {
+          final isAuth = decoded['type'] == 'AUTH';
+          final token = decoded['token']?.toString() ?? '';
+          if (!isAuth || token != _pairToken) {
+            _sendJson(socket, <String, dynamic>{
+              'type': 'ERROR',
+              'message': 'TOKEN_MISMATCH',
+            });
+            await socket.close(WebSocketStatus.policyViolation, 'TOKEN_MISMATCH');
+            return;
+          }
+          authenticated = true;
+          _authedClients.add(socket);
+          _sendJson(socket, <String, dynamic>{
+            'type': 'AUTH_OK',
+            'name': _playerNameBuilder?.call() ?? 'ChoirPlayer-iPad',
+          });
+          _sendStateTo(socket);
+          return;
+        }
+
+        if (decoded['type'] != 'COMMAND') {
+          return;
+        }
+        final command = _translateEnvelopeToCommand(decoded);
+        if (command == null) {
+          return;
+        }
+        final handler = _commandHandler;
+        if (handler != null) {
+          await handler(command);
+        }
+        broadcastState();
+      },
+      onDone: () => _removeSocket(socket),
+      onError: (_) => _removeSocket(socket),
+      cancelOnError: true,
+    );
+  }
+
+  void _removeSocket(WebSocket socket) {
+    _authedClients.remove(socket);
     try {
-      final decoded = jsonDecode(line);
-      if (decoded is Map<String, dynamic>) {
-        handler(decoded);
-        broadcastState();
-      } else if (decoded is Map) {
-        handler(decoded.cast<String, dynamic>());
-        broadcastState();
-      }
-    } catch (_) {
-      // Ignore malformed payloads in MVP mode.
+      socket.close();
+    } catch (_) {}
+  }
+
+  void _broadcastStateWhilePlaying() {
+    final builder = _stateSnapshotBuilder;
+    if (builder == null || _authedClients.isEmpty) {
+      return;
+    }
+    final snapshot = builder();
+    if (snapshot['isPlaying'] == true) {
+      _broadcastJson(<String, dynamic>{
+        'type': 'STATE',
+        'payload': snapshot,
+      });
     }
   }
 
-  void _sendStateTo(Socket socket) {
+  void _sendStateTo(WebSocket socket) {
     final builder = _stateSnapshotBuilder;
     if (builder == null) {
       return;
     }
-    try {
-      socket.write('${jsonEncode(builder())}\n');
-    } catch (_) {}
-  }
-
-  void _removeClient(Socket socket) {
-    _clients.remove(socket);
-    try {
-      socket.destroy();
-    } catch (_) {}
-  }
-
-  void _broadcastAnnouncement() {
-    final socket = _announceSocket;
-    if (socket == null) {
-      return;
-    }
-    final payload = jsonEncode({
-      'type': 'PLAYER_ANNOUNCE',
-      'port': commandPort,
-      'app': 'choir_rehearsal_mvp',
+    _sendJson(socket, <String, dynamic>{
+      'type': 'STATE',
+      'payload': builder(),
     });
-    final bytes = utf8.encode(payload);
-    socket.send(bytes, InternetAddress('255.255.255.255'), announcePort);
+  }
+
+  void _broadcastJson(Map<String, dynamic> message) {
+    final dead = <WebSocket>[];
+    for (final socket in _authedClients) {
+      try {
+        _sendJson(socket, message);
+      } catch (_) {
+        dead.add(socket);
+      }
+    }
+    for (final socket in dead) {
+      _removeSocket(socket);
+    }
+  }
+
+  void _sendJson(WebSocket socket, Map<String, dynamic> data) {
+    socket.add(jsonEncode(data));
+  }
+
+  Map<String, dynamic>? _decodeMap(Object? value) {
+    if (value is String) {
+      try {
+        final decoded = jsonDecode(value);
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+        if (decoded is Map) {
+          return decoded.cast<String, dynamic>();
+        }
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _translateEnvelopeToCommand(Map<String, dynamic> envelope) {
+    final command = envelope['command']?.toString() ?? '';
+    final args = envelope['args'];
+    final argsMap = args is Map ? args.cast<String, dynamic>() : <String, dynamic>{};
+
+    switch (command) {
+      case 'PLAY':
+        return <String, dynamic>{'type': 'PLAY'};
+      case 'PAUSE':
+        return <String, dynamic>{'type': 'PAUSE'};
+      case 'TOGGLE_PLAY':
+        return <String, dynamic>{'type': 'TOGGLE_PLAY'};
+      case 'JUMP_TO_MEASURE':
+        return <String, dynamic>{
+          'type': 'JUMP_TO_MEASURE',
+          'measure': argsMap['measure'],
+          'autoPlay': argsMap['autoPlay'] == true,
+        };
+      case 'JUMP_RELATIVE':
+        return <String, dynamic>{
+          'type': 'JUMP_RELATIVE',
+          'deltaMeasures': argsMap['deltaMeasures'],
+        };
+      case 'SET_TEMPO_PERCENT':
+        return <String, dynamic>{
+          'type': 'SET_TEMPO',
+          'percent': argsMap['percent'],
+        };
+      case 'ADJUST_TEMPO_PERCENT':
+        return <String, dynamic>{
+          'type': 'SET_TEMPO_ADJUST',
+          'delta': argsMap['deltaPercent'],
+        };
+      case 'SET_LOOP_A':
+        return <String, dynamic>{
+          'type': 'SET_LOOP_A',
+          'measure': argsMap['measure'],
+        };
+      case 'SET_LOOP_B':
+        return <String, dynamic>{
+          'type': 'SET_LOOP_B',
+          'measure': argsMap['measure'],
+        };
+      case 'SET_LOOP_RANGE':
+        return <String, dynamic>{
+          'type': 'SET_LOOP_RANGE',
+          'a': argsMap['a'],
+          'b': argsMap['b'],
+        };
+      case 'CLEAR_LOOP':
+        return <String, dynamic>{'type': 'CLEAR_LOOP'};
+      case 'SET_PART_ENABLED':
+        return <String, dynamic>{
+          'type': 'SET_PART_ENABLED',
+          'part': _protocolPartToInternal(argsMap['part']),
+          'enabled': argsMap['enabled'],
+        };
+      case 'SET_PARTS_ENABLED':
+        return <String, dynamic>{
+          'type': 'SET_PARTS_ENABLED',
+          'partsEnabledSet': argsMap['partsEnabledSet'],
+          'pianoEnabled': argsMap['pianoEnabled'],
+        };
+      case 'SET_MIX_PRESET':
+        return <String, dynamic>{
+          'type': 'SET_MIX_PRESET',
+          'preset': argsMap['preset'],
+          'parts': argsMap['parts'],
+          'pianoOn': argsMap['pianoEnabled'],
+        };
+      case 'PLAY_STARTING_PITCHES':
+        return <String, dynamic>{'type': 'PLAY_STARTING_PITCHES'};
+      case 'LOOP_ARM_TOGGLE':
+        return <String, dynamic>{'type': 'LOOP_ARM_TOGGLE'};
+      default:
+        return null;
+    }
+  }
+
+  String _protocolPartToInternal(Object? raw) {
+    switch (raw?.toString().toUpperCase()) {
+      case 'SOP':
+        return 'soprano';
+      case 'ALTO':
+        return 'alto';
+      case 'TENOR':
+        return 'tenor';
+      case 'BASS':
+        return 'bass';
+      case 'PIANO':
+        return 'piano';
+      default:
+        return raw?.toString().toLowerCase() ?? '';
+    }
+  }
+
+  static String _generateToken() {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rng = Random.secure();
+    return List<String>.generate(32, (_) => chars[rng.nextInt(chars.length)]).join();
+  }
+
+  Future<String> _loadOrCreateServerToken() async {
+    const tokenKey = 'choir_player_pair_token_v1';
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString(tokenKey);
+    if (existing != null && existing.isNotEmpty) {
+      return existing;
+    }
+    final created = _generateToken();
+    await prefs.setString(tokenKey, created);
+    return created;
+  }
+
+  Future<String> _resolveLanIp() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      for (final interface in interfaces) {
+        for (final address in interface.addresses) {
+          if (_isPrivateIp(address.address)) {
+            return address.address;
+          }
+        }
+      }
+      if (interfaces.isNotEmpty && interfaces.first.addresses.isNotEmpty) {
+        return interfaces.first.addresses.first.address;
+      }
+    } catch (_) {}
+    return '127.0.0.1';
+  }
+
+  bool _isPrivateIp(String ip) {
+    if (ip.startsWith('10.')) {
+      return true;
+    }
+    if (ip.startsWith('192.168.')) {
+      return true;
+    }
+    if (ip.startsWith('172.')) {
+      final segments = ip.split('.');
+      final second = segments.length > 1 ? int.tryParse(segments[1]) : null;
+      if (second != null && second >= 16 && second <= 31) {
+        return true;
+      }
+    }
+    return false;
   }
 }
 
+class PlayerPairingProfile {
+  const PlayerPairingProfile({
+    required this.name,
+    required this.ip,
+    required this.port,
+    required this.token,
+  });
+
+  final String name;
+  final String ip;
+  final int port;
+  final String token;
+
+  factory PlayerPairingProfile.fromMap(Map<String, dynamic> map) {
+    return PlayerPairingProfile(
+      name: map['name']?.toString() ?? 'ChoirPlayer-iPad',
+      ip: map['ip']?.toString() ?? '',
+      port: (map['port'] is int)
+          ? map['port'] as int
+          : int.tryParse(map['port']?.toString() ?? '') ?? 8743,
+      token: map['token']?.toString() ?? '',
+    );
+  }
+
+  Map<String, dynamic> toMap() => <String, dynamic>{
+    'name': name,
+    'ip': ip,
+    'port': port,
+    'token': token,
+  };
+}
+
 class DiscoveredPlayer {
-  DiscoveredPlayer({
+  const DiscoveredPlayer({
     required this.host,
     required this.port,
     required this.lastSeen,
@@ -180,224 +430,391 @@ class DiscoveredPlayer {
 
   final String host;
   final int port;
-  DateTime lastSeen;
+  final DateTime lastSeen;
 }
 
 class RemoteClient extends ChangeNotifier {
   RemoteClient({this.announcePort = 45455});
 
+  static const String _pairedProfilePrefsKey = 'choir_remote_paired_profile_v1';
+
   final int announcePort;
+  final List<DiscoveredPlayer> _discoveredPlayers = const <DiscoveredPlayer>[];
 
-  RawDatagramSocket? _discoverySocket;
-  Timer? _staleCleanupTimer;
-
-  final Map<String, DiscoveredPlayer> _discoveredPlayersByHost = {};
-  Socket? _commandSocket;
-  StreamSubscription<String>? _commandSubscription;
+  WebSocket? _socket;
+  StreamSubscription<dynamic>? _socketSubscription;
+  Timer? _reconnectTimer;
+  PlayerPairingProfile? _pairedProfile;
   Map<String, dynamic>? _latestState;
 
-  String? _connectedHost;
-  int? _connectedPort;
-  String? _connectionStatus;
   bool _connecting = false;
-
-  List<DiscoveredPlayer> get discoveredPlayers =>
-      _discoveredPlayersByHost.values.toList()
-        ..sort((a, b) => a.host.compareTo(b.host));
+  bool _authenticated = false;
+  bool _manualDisconnect = false;
+  String? _connectionStatus;
 
   Map<String, dynamic>? get latestState => _latestState;
-  String? get connectedHost => _connectedHost;
-  int? get connectedPort => _connectedPort;
+  String? get connectedHost => _pairedProfile?.ip;
+  int? get connectedPort => _pairedProfile?.port;
   String? get connectionStatus => _connectionStatus;
-  bool get isConnected => _commandSocket != null;
+  bool get isConnected => _socket != null && _authenticated;
   bool get isConnecting => _connecting;
+  PlayerPairingProfile? get pairedProfile => _pairedProfile;
+  List<DiscoveredPlayer> get discoveredPlayers => _discoveredPlayers;
 
   Future<void> startDiscovery() async {
-    if (_discoverySocket != null) {
+    // Discovery intentionally disabled for MVP reliability.
+  }
+
+  Future<void> restoreAndReconnect() async {
+    await loadSavedPairing();
+    await connectPaired();
+  }
+
+  Future<void> loadSavedPairing() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_pairedProfilePrefsKey);
+    if (raw == null || raw.isEmpty) {
       return;
     }
-    _discoverySocket = await RawDatagramSocket.bind(
-      InternetAddress.anyIPv4,
-      announcePort,
-      reuseAddress: true,
-      reusePort: true,
-    );
-    _discoverySocket!.listen((event) {
-      if (event != RawSocketEvent.read) {
-        return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        _pairedProfile = PlayerPairingProfile.fromMap(decoded.cast<String, dynamic>());
+        notifyListeners();
       }
-      final datagram = _discoverySocket!.receive();
-      if (datagram == null) {
-        return;
-      }
-      _handleAnnouncement(
-        sourceHost: datagram.address.address,
-        payload: datagram.data,
-      );
-    });
+    } catch (_) {}
+  }
 
-    _staleCleanupTimer = Timer.periodic(
-      const Duration(seconds: 2),
-      (_) => _dropStalePlayers(),
+  Future<void> pairFromPayload(
+    Map<String, dynamic> payload, {
+    bool connectNow = true,
+  }) async {
+    final profile = PlayerPairingProfile.fromMap(payload);
+    _pairedProfile = profile;
+    await _savePairingProfile(profile);
+    notifyListeners();
+    if (connectNow) {
+      await connectPaired();
+    }
+  }
+
+  Future<void> pairFromQrText(String rawPayload) async {
+    final decoded = jsonDecode(rawPayload);
+    if (decoded is! Map) {
+      throw const FormatException('QR payload is not JSON object');
+    }
+    await pairFromPayload(decoded.cast<String, dynamic>());
+  }
+
+  Future<void> connectPaired() async {
+    final profile = _pairedProfile;
+    if (profile == null) {
+      _connectionStatus = 'No paired player';
+      notifyListeners();
+      return;
+    }
+    await connect(
+      host: profile.ip,
+      port: profile.port,
+      token: profile.token,
+      name: profile.name,
+      persist: true,
     );
   }
 
   Future<void> connect({
     required String host,
     required int port,
+    String? token,
+    String? name,
+    bool persist = false,
   }) async {
     if (_connecting) {
       return;
     }
     _connecting = true;
+    _manualDisconnect = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _connectionStatus = 'Connecting...';
     notifyListeners();
-    try {
-      await disconnect();
-      final socket = await Socket.connect(
-        host,
-        port,
-        timeout: const Duration(seconds: 3),
-      );
-      socket.setOption(SocketOption.tcpNoDelay, true);
-      _commandSocket = socket;
-      _connectedHost = host;
-      _connectedPort = port;
-      _connectionStatus = 'Connected to $host:$port';
 
-      _commandSubscription = socket
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen(
-            _handleServerLine,
-            onError: (_) => _handleDisconnect('Connection error'),
-            onDone: () => _handleDisconnect('Disconnected'),
-            cancelOnError: true,
-          );
-    } catch (error) {
+    final effectiveToken = token ?? _pairedProfile?.token;
+    if (effectiveToken == null || effectiveToken.isEmpty) {
+      _connecting = false;
+      _connectionStatus = 'Token required. Pair using QR.';
+      notifyListeners();
+      return;
+    }
+
+    final profile = PlayerPairingProfile(
+      name: name ?? _pairedProfile?.name ?? 'ChoirPlayer-iPad',
+      ip: host,
+      port: port,
+      token: effectiveToken,
+    );
+    _pairedProfile = profile;
+    if (persist) {
+      await _savePairingProfile(profile);
+    }
+
+    try {
+      await disconnect(manual: false);
+      final socket = await WebSocket.connect(
+        'ws://$host:$port/ws',
+      ).timeout(const Duration(seconds: 4));
+      _socket = socket;
+      _authenticated = false;
+      _connectionStatus = 'Authorizing...';
+      notifyListeners();
+
+      socket.add(
+        jsonEncode(<String, dynamic>{
+          'type': 'AUTH',
+          'token': effectiveToken,
+        }),
+      );
+
+      _socketSubscription = socket.listen(
+        _handleServerMessage,
+        onDone: () => _handleDisconnect('Disconnected'),
+        onError: (_) => _handleDisconnect('Connection error'),
+        cancelOnError: true,
+      );
+    } catch (_) {
       _connectionStatus = 'Failed to connect';
+      _connecting = false;
+      _scheduleReconnect();
     } finally {
       _connecting = false;
       notifyListeners();
     }
   }
 
-  Future<void> disconnect() async {
-    final subscription = _commandSubscription;
-    _commandSubscription = null;
+  void sendCommandEnvelope(
+    String command, {
+    Map<String, dynamic> args = const <String, dynamic>{},
+  }) {
+    final socket = _socket;
+    if (socket == null || !_authenticated) {
+      _connectionStatus = 'Not connected';
+      notifyListeners();
+      return;
+    }
+    try {
+      socket.add(
+        jsonEncode(<String, dynamic>{
+          'type': 'COMMAND',
+          'command': command,
+          'args': args,
+        }),
+      );
+    } catch (_) {
+      _handleDisconnect('Failed to send command');
+    }
+  }
+
+  // Compatibility adapter for older UI call sites.
+  void sendCommand(Map<String, dynamic> command) {
+    final envelope = _internalCommandToEnvelope(command);
+    if (envelope == null) {
+      return;
+    }
+    sendCommandEnvelope(
+      envelope.command,
+      args: envelope.args,
+    );
+  }
+
+  Future<void> disconnect({bool manual = true}) async {
+    _manualDisconnect = manual;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+
+    final subscription = _socketSubscription;
+    _socketSubscription = null;
     if (subscription != null) {
       await subscription.cancel();
     }
-    final socket = _commandSocket;
-    _commandSocket = null;
+
+    final socket = _socket;
+    _socket = null;
     if (socket != null) {
       try {
         await socket.close();
       } catch (_) {}
-      try {
-        socket.destroy();
-      } catch (_) {}
     }
-    _connectedHost = null;
-    _connectedPort = null;
+    _authenticated = false;
+    if (manual) {
+      _connectionStatus = 'Disconnected';
+    }
     notifyListeners();
-  }
-
-  void sendCommand(Map<String, dynamic> command) {
-    final socket = _commandSocket;
-    if (socket == null) {
-      return;
-    }
-    try {
-      socket.write('${jsonEncode(command)}\n');
-    } catch (_) {
-      _handleDisconnect('Failed to send');
-    }
   }
 
   @override
   void dispose() {
-    _staleCleanupTimer?.cancel();
-    _discoverySocket?.close();
-    _discoverySocket = null;
-    _commandSubscription?.cancel();
-    _commandSubscription = null;
-    try {
-      _commandSocket?.destroy();
-    } catch (_) {}
-    _commandSocket = null;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    unawaited(disconnect());
     super.dispose();
   }
 
-  void _handleAnnouncement({
-    required String sourceHost,
-    required List<int> payload,
-  }) {
+  void _handleServerMessage(dynamic event) {
+    if (event is! String) {
+      return;
+    }
     try {
-      final decoded = jsonDecode(utf8.decode(payload));
+      final decoded = jsonDecode(event);
       if (decoded is! Map) {
         return;
       }
       final map = decoded.cast<String, dynamic>();
-      if (map['type'] != 'PLAYER_ANNOUNCE') {
-        return;
+      final type = map['type']?.toString() ?? '';
+      switch (type) {
+        case 'AUTH_OK':
+          _authenticated = true;
+          _reconnectTimer?.cancel();
+          _reconnectTimer = null;
+          _connectionStatus = 'Connected to ${_pairedProfile?.name ?? 'player'}';
+          notifyListeners();
+          break;
+        case 'STATE':
+          final payload = map['payload'];
+          if (payload is Map) {
+            _latestState = payload.cast<String, dynamic>();
+            notifyListeners();
+          }
+          break;
+        case 'ERROR':
+          final message = map['message']?.toString() ?? 'Server error';
+          _connectionStatus = message;
+          if (message == 'TOKEN_MISMATCH') {
+            _manualDisconnect = true;
+          }
+          notifyListeners();
+          break;
+        default:
+          return;
       }
-      final port = map['port'];
-      if (port is! int) {
-        return;
-      }
-      final existing = _discoveredPlayersByHost[sourceHost];
-      if (existing == null) {
-        _discoveredPlayersByHost[sourceHost] = DiscoveredPlayer(
-          host: sourceHost,
-          port: port,
-          lastSeen: DateTime.now(),
-        );
-      } else {
-        existing.lastSeen = DateTime.now();
-      }
-      notifyListeners();
-    } catch (_) {
-      // Ignore malformed broadcasts.
-    }
-  }
-
-  void _handleServerLine(String line) {
-    try {
-      final decoded = jsonDecode(line);
-      if (decoded is Map) {
-        _latestState = decoded.cast<String, dynamic>();
-        notifyListeners();
-      }
-    } catch (_) {
-      // Ignore malformed state payload.
-    }
-  }
-
-  void _dropStalePlayers() {
-    if (_discoveredPlayersByHost.isEmpty) {
-      return;
-    }
-    final now = DateTime.now();
-    final staleHosts = _discoveredPlayersByHost.entries
-        .where((entry) => now.difference(entry.value.lastSeen).inSeconds > 5)
-        .map((entry) => entry.key)
-        .toList();
-    for (final host in staleHosts) {
-      _discoveredPlayersByHost.remove(host);
-    }
-    if (staleHosts.isNotEmpty) {
-      notifyListeners();
-    }
+    } catch (_) {}
   }
 
   void _handleDisconnect(String status) {
+    _socket = null;
+    _socketSubscription = null;
+    _authenticated = false;
     _connectionStatus = status;
-    _commandSocket = null;
-    _commandSubscription = null;
-    _connectedHost = null;
-    _connectedPort = null;
     notifyListeners();
+    _scheduleReconnect();
   }
+
+  void _scheduleReconnect() {
+    if (_manualDisconnect || _pairedProfile == null || _connecting) {
+      return;
+    }
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 2), () {
+      unawaited(connectPaired());
+    });
+  }
+
+  Future<void> _savePairingProfile(PlayerPairingProfile profile) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_pairedProfilePrefsKey, jsonEncode(profile.toMap()));
+  }
+
+  _CommandEnvelope? _internalCommandToEnvelope(Map<String, dynamic> command) {
+    final type = command['type']?.toString() ?? '';
+    switch (type) {
+      case 'PLAY':
+        return const _CommandEnvelope('PLAY', <String, dynamic>{});
+      case 'PAUSE':
+        return const _CommandEnvelope('PAUSE', <String, dynamic>{});
+      case 'TOGGLE_PLAY':
+        return const _CommandEnvelope('TOGGLE_PLAY', <String, dynamic>{});
+      case 'JUMP_TO_MEASURE':
+        return _CommandEnvelope('JUMP_TO_MEASURE', <String, dynamic>{
+          'measure': command['measure'],
+          if (command.containsKey('autoPlay')) 'autoPlay': command['autoPlay'],
+        });
+      case 'JUMP_RELATIVE':
+        return _CommandEnvelope('JUMP_RELATIVE', <String, dynamic>{
+          'deltaMeasures': command['deltaMeasures'],
+        });
+      case 'SET_TEMPO':
+        return _CommandEnvelope('SET_TEMPO_PERCENT', <String, dynamic>{
+          'percent': command['percent'],
+        });
+      case 'SET_TEMPO_ADJUST':
+        return _CommandEnvelope('ADJUST_TEMPO_PERCENT', <String, dynamic>{
+          'deltaPercent': command['delta'],
+        });
+      case 'SET_LOOP_A':
+        return _CommandEnvelope('SET_LOOP_A', <String, dynamic>{
+          'measure': command['measure'],
+        });
+      case 'SET_LOOP_B':
+        return _CommandEnvelope('SET_LOOP_B', <String, dynamic>{
+          'measure': command['measure'],
+        });
+      case 'SET_LOOP_RANGE':
+        return _CommandEnvelope('SET_LOOP_RANGE', <String, dynamic>{
+          'a': command['a'],
+          'b': command['b'],
+        });
+      case 'CLEAR_LOOP':
+        return const _CommandEnvelope('CLEAR_LOOP', <String, dynamic>{});
+      case 'SET_PART_ENABLED':
+        return _CommandEnvelope('SET_PART_ENABLED', <String, dynamic>{
+          'part': _internalPartToProtocol(command['part']),
+          'enabled': command['enabled'],
+        });
+      case 'SET_PARTS_ENABLED':
+        return _CommandEnvelope('SET_PARTS_ENABLED', <String, dynamic>{
+          'partsEnabledSet': command['partsEnabledSet'],
+          'pianoEnabled': command['pianoEnabled'],
+        });
+      case 'SET_MIX_PRESET':
+        return _CommandEnvelope('SET_MIX_PRESET', <String, dynamic>{
+          'preset': command['preset'],
+          'parts': command['parts'],
+          'pianoEnabled': command['pianoOn'],
+        });
+      case 'SET_ALL_PARTS':
+        return const _CommandEnvelope('SET_MIX_PRESET', <String, dynamic>{
+          'preset': 'ALL',
+        });
+      case 'PLAY_STARTING_PITCHES':
+        return const _CommandEnvelope('PLAY_STARTING_PITCHES', <String, dynamic>{});
+      case 'LOOP_ARM_TOGGLE':
+        return const _CommandEnvelope('LOOP_ARM_TOGGLE', <String, dynamic>{});
+      default:
+        return null;
+    }
+  }
+
+  String _internalPartToProtocol(Object? raw) {
+    switch (raw?.toString().toLowerCase()) {
+      case 'soprano':
+        return 'SOP';
+      case 'alto':
+        return 'ALTO';
+      case 'tenor':
+        return 'TENOR';
+      case 'bass':
+        return 'BASS';
+      case 'piano':
+        return 'PIANO';
+      default:
+        return raw?.toString() ?? '';
+    }
+  }
+}
+
+class _CommandEnvelope {
+  const _CommandEnvelope(this.command, this.args);
+
+  final String command;
+  final Map<String, dynamic> args;
 }
 

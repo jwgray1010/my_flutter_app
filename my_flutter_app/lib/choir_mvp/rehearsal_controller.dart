@@ -51,7 +51,7 @@ class RehearsalController extends ChangeNotifier {
   PlaybackController get playbackController => _playbackController;
   String? get loadedFileName => _loadedFileName;
   String? get errorMessage => _errorMessage;
-  int get serverPort => _server.commandPort;
+  int get serverPort => _server.port;
   int get announcePort => _server.announcePort;
 
   Future<void> initialize() async {
@@ -61,14 +61,22 @@ class RehearsalController extends ChangeNotifier {
     _playback.addListener(_handlePlaybackUpdate);
     await _playback.initializeAudio();
     await _server.start(
-      onCommand: (command) {
-        unawaited(applyCommand(command));
+      onCommand: (command) async {
+        await applyCommand(command);
       },
-      stateBuilder: _playbackController.snapshotState,
+      stateBuilder: _buildRemoteState,
+      playerNameBuilder: _playerDisplayName,
     );
     _server.broadcastState();
     _initialized = true;
     notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> pairingPayload() async {
+    if (!_initialized) {
+      await initialize();
+    }
+    return _server.buildPairingPayload();
   }
 
   Future<void> loadMusicXmlFromPicker() async {
@@ -224,6 +232,13 @@ class RehearsalController extends ChangeNotifier {
       case 'PAUSE':
         _playbackController.pause();
         return const CommandExecutionResult(applied: true, message: 'Pause');
+      case 'TOGGLE_PLAY':
+        if (_playback.isPlaying) {
+          _playbackController.pause();
+          return const CommandExecutionResult(applied: true, message: 'Pause');
+        }
+        await _playbackController.play();
+        return const CommandExecutionResult(applied: true, message: 'Play');
       case 'JUMP_TO_MEASURE':
         final measure = _readInt(command['measure']);
         if (measure != null) {
@@ -330,8 +345,28 @@ class RehearsalController extends ChangeNotifier {
           applied: false,
           message: "Didn't catch that.",
         );
+      case 'SET_PARTS_ENABLED':
+        final rawParts = command['partsEnabledSet'];
+        final pianoEnabled = command['pianoEnabled'] as bool?;
+        final enabled = <ChoirPart>{};
+        if (rawParts is List) {
+          for (final raw in rawParts) {
+            final parsed = _partFromProtocol(raw.toString());
+            if (parsed != null) {
+              enabled.add(parsed);
+            }
+          }
+        }
+        if (pianoEnabled == null && _playback.enabledParts.contains(ChoirPart.piano)) {
+          enabled.add(ChoirPart.piano);
+        }
+        _playbackController.setPartsEnabled(enabled, pianoOn: pianoEnabled);
+        return const CommandExecutionResult(
+          applied: true,
+          message: 'Parts updated',
+        );
       case 'SET_MIX_PRESET':
-        final presetRaw = (command['preset'] as String?) ?? '';
+        final presetRaw = ((command['preset'] as String?) ?? '').toLowerCase();
         switch (presetRaw) {
           case 'all':
             _playbackController.setPreset(MixPreset.all);
@@ -478,6 +513,64 @@ class RehearsalController extends ChangeNotifier {
   void _broadcastStateAndNotify() {
     _server.broadcastState();
     notifyListeners();
+  }
+
+  String _playerDisplayName() {
+    return 'ChoirPlayer-iPad';
+  }
+
+  Map<String, dynamic> _buildRemoteState() {
+    final score = _playback.score;
+    final loopEnabled = _playback.loopA != null && _playback.loopB != null;
+    return <String, dynamic>{
+      'pieceName': _loadedFileName ?? 'Untitled',
+      'isPlaying': _playback.isPlaying,
+      'currentMeasure': _playback.currentMeasure,
+      'tempoPercent': _playback.tempoPercent.round(),
+      'loop': <String, dynamic>{
+        'enabled': loopEnabled,
+        'a': _playback.loopA,
+        'b': _playback.loopB,
+        'armed': _playbackController.loopArmed,
+      },
+      'loopArmed': _playbackController.loopArmed,
+      'partsEnabled': _playback.enabledParts.map(_partToProtocol).toList(),
+      'measures': score?.measureNumbers ?? <int>[],
+      'rehearsalMarks': score?.rehearsalMarks ?? <String, int>{},
+    };
+  }
+
+  String _partToProtocol(ChoirPart part) {
+    switch (part) {
+      case ChoirPart.soprano:
+        return 'SOP';
+      case ChoirPart.alto:
+        return 'ALTO';
+      case ChoirPart.tenor:
+        return 'TENOR';
+      case ChoirPart.bass:
+        return 'BASS';
+      case ChoirPart.piano:
+        return 'PIANO';
+    }
+  }
+
+  ChoirPart? _partFromProtocol(String raw) {
+    switch (raw.trim().toUpperCase()) {
+      case 'SOP':
+      case 'SOPRANO':
+        return ChoirPart.soprano;
+      case 'ALTO':
+        return ChoirPart.alto;
+      case 'TENOR':
+        return ChoirPart.tenor;
+      case 'BASS':
+        return ChoirPart.bass;
+      case 'PIANO':
+        return ChoirPart.piano;
+      default:
+        return choirPartFromId(raw);
+    }
   }
 }
 
