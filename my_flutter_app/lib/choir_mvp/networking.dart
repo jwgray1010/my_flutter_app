@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 typedef CommandHandler = FutureOr<void> Function(Map<String, dynamic> command);
 typedef StateSnapshotBuilder = Map<String, dynamic> Function();
 typedef PlayerNameBuilder = String Function();
+typedef ClientConnectionHandler = void Function(String clientId, bool connected);
 
 class LocalPlayerServer {
   LocalPlayerServer({
@@ -23,8 +24,11 @@ class LocalPlayerServer {
   CommandHandler? _commandHandler;
   StateSnapshotBuilder? _stateSnapshotBuilder;
   PlayerNameBuilder? _playerNameBuilder;
+  ClientConnectionHandler? _clientConnectionHandler;
   Timer? _stateTickTimer;
   String _lastKnownIp = '127.0.0.1';
+  String? _classSessionToken;
+  final Map<WebSocket, String> _clientIdBySocket = <WebSocket, String>{};
 
   bool get isRunning => _httpServer != null;
 
@@ -36,6 +40,7 @@ class LocalPlayerServer {
     required CommandHandler onCommand,
     required StateSnapshotBuilder stateBuilder,
     PlayerNameBuilder? playerNameBuilder,
+    ClientConnectionHandler? onClientConnectionChanged,
   }) async {
     if (isRunning) {
       return;
@@ -43,6 +48,7 @@ class LocalPlayerServer {
     _commandHandler = onCommand;
     _stateSnapshotBuilder = stateBuilder;
     _playerNameBuilder = playerNameBuilder;
+    _clientConnectionHandler = onClientConnectionChanged;
     _pairToken = await _loadOrCreateServerToken();
 
     _httpServer = await HttpServer.bind(
@@ -63,16 +69,27 @@ class LocalPlayerServer {
     );
   }
 
-  Future<Map<String, dynamic>> buildPairingPayload() async {
+  Future<Map<String, dynamic>> buildPairingPayload({
+    Map<String, dynamic>? extra,
+    String? overrideToken,
+  }) async {
     if (isRunning) {
       _lastKnownIp = await _resolveLanIp();
     }
-    return <String, dynamic>{
+    final payload = <String, dynamic>{
       'name': _playerNameBuilder?.call() ?? 'ChoirPlayer-iPad',
       'ip': _lastKnownIp,
       'port': port,
-      'token': _pairToken,
+      'token': overrideToken ?? _classSessionToken ?? _pairToken,
     };
+    if (extra != null) {
+      payload.addAll(extra);
+    }
+    return payload;
+  }
+
+  void setClassSessionToken(String? token) {
+    _classSessionToken = token;
   }
 
   void broadcastState() {
@@ -122,6 +139,7 @@ class LocalPlayerServer {
 
   void _handleWebSocket(WebSocket socket) {
     var authenticated = false;
+    final clientId = _newClientId();
 
     socket.listen(
       (event) async {
@@ -133,7 +151,8 @@ class LocalPlayerServer {
         if (!authenticated) {
           final isAuth = decoded['type'] == 'AUTH';
           final token = decoded['token']?.toString() ?? '';
-          if (!isAuth || token != _pairToken) {
+          final tokenOk = token == _pairToken || (_classSessionToken != null && token == _classSessionToken);
+          if (!isAuth || !tokenOk) {
             _sendJson(socket, <String, dynamic>{
               'type': 'ERROR',
               'message': 'TOKEN_MISMATCH',
@@ -143,6 +162,8 @@ class LocalPlayerServer {
           }
           authenticated = true;
           _authedClients.add(socket);
+          _clientIdBySocket[socket] = clientId;
+          _clientConnectionHandler?.call(clientId, true);
           _sendJson(socket, <String, dynamic>{
             'type': 'AUTH_OK',
             'name': _playerNameBuilder?.call() ?? 'ChoirPlayer-iPad',
@@ -151,18 +172,29 @@ class LocalPlayerServer {
           return;
         }
 
-        if (decoded['type'] != 'COMMAND') {
-          return;
-        }
-        final command = _translateEnvelopeToCommand(decoded);
-        if (command == null) {
-          return;
-        }
+        final messageType = decoded['type']?.toString() ?? '';
         final handler = _commandHandler;
-        if (handler != null) {
-          await handler(command);
+        if (handler == null) {
+          return;
         }
-        broadcastState();
+        if (messageType == 'COMMAND') {
+          final command = _translateEnvelopeToCommand(decoded);
+          if (command == null) {
+            return;
+          }
+          command['_clientId'] = clientId;
+          await handler(command);
+          broadcastState();
+          return;
+        }
+        if (_isStudentEventType(messageType)) {
+          final event = <String, dynamic>{
+            ...decoded,
+            '_clientId': clientId,
+          };
+          await handler(event);
+          broadcastState();
+        }
       },
       onDone: () => _removeSocket(socket),
       onError: (_) => _removeSocket(socket),
@@ -171,6 +203,10 @@ class LocalPlayerServer {
   }
 
   void _removeSocket(WebSocket socket) {
+    final clientId = _clientIdBySocket.remove(socket);
+    if (clientId != null) {
+      _clientConnectionHandler?.call(clientId, false);
+    }
     _authedClients.remove(socket);
     try {
       socket.close();
@@ -333,6 +369,19 @@ class LocalPlayerServer {
     }
   }
 
+  bool _isStudentEventType(String type) {
+    return type == 'JOIN_CLASS_SESSION' ||
+        type == 'START_PRACTICE_SESSION' ||
+        type == 'PRACTICE_EVENT' ||
+        type == 'PRACTICE_SUMMARY';
+  }
+
+  String _newClientId() {
+    final now = DateTime.now().microsecondsSinceEpoch;
+    final rand = Random.secure().nextInt(1 << 32);
+    return 'c$now-$rand';
+  }
+
   static String _generateToken() {
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final rng = Random.secure();
@@ -395,12 +444,16 @@ class PlayerPairingProfile {
     required this.ip,
     required this.port,
     required this.token,
+    this.mode,
+    this.sessionId,
   });
 
   final String name;
   final String ip;
   final int port;
   final String token;
+  final String? mode;
+  final String? sessionId;
 
   factory PlayerPairingProfile.fromMap(Map<String, dynamic> map) {
     return PlayerPairingProfile(
@@ -410,6 +463,8 @@ class PlayerPairingProfile {
           ? map['port'] as int
           : int.tryParse(map['port']?.toString() ?? '') ?? 8743,
       token: map['token']?.toString() ?? '',
+      mode: map['mode']?.toString(),
+      sessionId: map['sessionId']?.toString(),
     );
   }
 
@@ -418,6 +473,8 @@ class PlayerPairingProfile {
     'ip': ip,
     'port': port,
     'token': token,
+    if (mode != null) 'mode': mode,
+    if (sessionId != null) 'sessionId': sessionId,
   };
 }
 
@@ -437,6 +494,7 @@ class RemoteClient extends ChangeNotifier {
   RemoteClient({this.announcePort = 45455});
 
   static const String _pairedProfilePrefsKey = 'choir_remote_paired_profile_v1';
+  static const String _deviceIdPrefsKey = 'choir_remote_device_id_v1';
 
   final int announcePort;
   final List<DiscoveredPlayer> _discoveredPlayers = const <DiscoveredPlayer>[];
@@ -451,6 +509,7 @@ class RemoteClient extends ChangeNotifier {
   bool _authenticated = false;
   bool _manualDisconnect = false;
   String? _connectionStatus;
+  String? _deviceId;
 
   Map<String, dynamic>? get latestState => _latestState;
   String? get connectedHost => _pairedProfile?.ip;
@@ -460,12 +519,23 @@ class RemoteClient extends ChangeNotifier {
   bool get isConnecting => _connecting;
   PlayerPairingProfile? get pairedProfile => _pairedProfile;
   List<DiscoveredPlayer> get discoveredPlayers => _discoveredPlayers;
+  String get deviceId {
+    final existing = _deviceId;
+    if (existing != null && existing.isNotEmpty) {
+      return existing;
+    }
+    final created = _generateId('device');
+    _deviceId = created;
+    unawaited(_saveDeviceId(created));
+    return created;
+  }
 
   Future<void> startDiscovery() async {
     // Discovery intentionally disabled for MVP reliability.
   }
 
   Future<void> restoreAndReconnect() async {
+    await _ensureDeviceIdLoaded();
     await loadSavedPairing();
     await connectPaired();
   }
@@ -495,6 +565,28 @@ class RemoteClient extends ChangeNotifier {
     notifyListeners();
     if (connectNow) {
       await connectPaired();
+    }
+  }
+
+  void sendStudentMessage(
+    String type, {
+    Map<String, dynamic> payload = const <String, dynamic>{},
+  }) {
+    final socket = _socket;
+    if (socket == null || !_authenticated) {
+      _connectionStatus = 'Not connected';
+      notifyListeners();
+      return;
+    }
+    try {
+      socket.add(
+        jsonEncode(<String, dynamic>{
+          'type': type,
+          ...payload,
+        }),
+      );
+    } catch (_) {
+      _handleDisconnect('Failed to send message');
     }
   }
 
@@ -721,6 +813,29 @@ class RemoteClient extends ChangeNotifier {
   Future<void> _savePairingProfile(PlayerPairingProfile profile) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_pairedProfilePrefsKey, jsonEncode(profile.toMap()));
+  }
+
+  Future<void> _ensureDeviceIdLoaded() async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString(_deviceIdPrefsKey);
+    if (existing != null && existing.isNotEmpty) {
+      _deviceId = existing;
+      return;
+    }
+    final created = _generateId('device');
+    _deviceId = created;
+    await prefs.setString(_deviceIdPrefsKey, created);
+  }
+
+  Future<void> _saveDeviceId(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_deviceIdPrefsKey, value);
+  }
+
+  String _generateId(String prefix) {
+    final now = DateTime.now().microsecondsSinceEpoch;
+    final rand = Random.secure().nextInt(1 << 32);
+    return '${prefix}_$now$rand';
   }
 
   _CommandEnvelope? _internalCommandToEnvelope(Map<String, dynamic> command) {

@@ -5,10 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import 'class_session_models.dart';
 import 'models.dart';
 import 'networking.dart';
 import 'rehearsal_controller.dart';
 import 'remote_roku_ui.dart';
+import 'teacher_view_screen.dart';
 import 'voice_commands.dart';
 import 'voice_help_screen.dart';
 import 'voice_ptt_service.dart';
@@ -242,6 +244,11 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                 onPressed: _showPairingQrSheet,
                 icon: const Icon(Icons.qr_code),
               ),
+              IconButton(
+                tooltip: 'Teacher View',
+                onPressed: _openTeacherView,
+                icon: const Icon(Icons.monitor),
+              ),
               if (_isPttListening || _isPttProcessing)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
@@ -295,6 +302,26 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                       icon: const Icon(Icons.qr_code),
                       label: const Text('Pair Remote'),
                     ),
+                    ElevatedButton.icon(
+                      onPressed: _showStartClassSessionDialog,
+                      icon: const Icon(Icons.class_),
+                      label: Text(
+                        _controller.hasActiveClassSession
+                            ? 'Restart Class Session'
+                            : 'Start Class Session',
+                      ),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed:
+                          _controller.hasActiveClassSession ? _showClassSessionQrSheet : null,
+                      icon: const Icon(Icons.qr_code_2),
+                      label: const Text('Class QR'),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: _openTeacherView,
+                      icon: const Icon(Icons.assessment),
+                      label: const Text('Teacher View'),
+                    ),
                     Text(
                       _controller.loadedFileName ?? 'No score loaded',
                       style: const TextStyle(fontSize: 18),
@@ -306,6 +333,10 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                       ),
                   ],
                 ),
+                if (_controller.classSession != null) ...[
+                  const SizedBox(height: 10),
+                  _ClassSessionStatusCard(session: _controller.classSession!),
+                ],
                 if (_controller.errorMessage != null) ...[
                   const SizedBox(height: 10),
                   Text(
@@ -477,6 +508,27 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
 
   Future<void> _showPairingQrSheet() async {
     final payload = await _controller.pairingPayload();
+    await _showQrPayloadSheet(
+      title: 'Pair Remote',
+      payload: payload,
+    );
+  }
+
+  Future<void> _showClassSessionQrSheet() async {
+    if (!_controller.hasActiveClassSession) {
+      return;
+    }
+    final payload = await _controller.classSessionPairingPayload();
+    await _showQrPayloadSheet(
+      title: 'Class Session QR',
+      payload: payload,
+    );
+  }
+
+  Future<void> _showQrPayloadSheet({
+    required String title,
+    required Map<String, dynamic> payload,
+  }) async {
     if (!mounted) {
       return;
     }
@@ -492,9 +544,9 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'Pair Remote',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                Text(
+                  title,
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 12),
                 QrImageView(
@@ -514,6 +566,49 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
           ),
         );
       },
+    );
+  }
+
+  Future<void> _showStartClassSessionDialog() async {
+    final textController = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Start Class Session'),
+          content: TextField(
+            controller: textController,
+            decoration: const InputDecoration(labelText: 'Class name (optional)'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                await _controller.startClassSession(
+                  className: textController.text.trim(),
+                );
+                if (!mounted) {
+                  return;
+                }
+                Navigator.of(context).pop();
+                await _showClassSessionQrSheet();
+              },
+              child: const Text('Start'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _openTeacherView() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TeacherViewScreen(controller: _controller),
+      ),
     );
   }
 
@@ -908,6 +1003,41 @@ class _CurrentStatusCard extends StatelessWidget {
                 color: loopArmed ? Colors.greenAccent : Colors.white60,
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ClassSessionStatusCard extends StatelessWidget {
+  const _ClassSessionStatusCard({
+    required this.session,
+  });
+
+  final ClassSessionState session;
+
+  @override
+  Widget build(BuildContext context) {
+    final connected = session.rosterByDeviceId.values.where((row) => row.connected).length;
+    return Card(
+      color: const Color(0xFF1A2530),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            Text(
+              session.className.isEmpty ? 'Class Session Active' : session.className,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+            ),
+            Text(
+              'Session ${session.sessionId.length > 8 ? session.sessionId.substring(0, 8) : session.sessionId}...',
+            ),
+            Text('Practice sessions: ${session.practiceSessions.length}'),
+            Text('Students: ${session.rosterByDeviceId.length}'),
+            Text('Connected: $connected'),
           ],
         ),
       ),

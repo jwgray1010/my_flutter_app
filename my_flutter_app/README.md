@@ -62,3 +62,38 @@ Voice control is push-to-talk only (no always-listening mode).
   - Remote -> Player: `{ "type":"COMMAND", "command":"...", "args":{...} }`
   - Player -> Remote: `{ "type":"STATE", "payload":{...} }`
 - Token mismatch is rejected by player.
+
+## Student Practice Mode + Teacher View (Local Only)
+
+### Teacher flow (iPad Player)
+
+1. Tap **Start Class Session** on Main Player.
+2. Enter optional class name.
+3. Player generates class `sessionId` and class pairing token.
+4. Tap **Class QR** and show QR to students.
+5. Open **Teacher View**:
+   - Live roster (name, part, status, measure, tempo, current session)
+   - Completion summary (minutes, sessions completed, last activity)
+   - Trouble spots (most-looped ranges, most-visited measures)
+6. Use **Export CSV** in Teacher View to share report.
+
+### Student flow (iPhone)
+
+1. Open iPhone role and choose **Student Practice**.
+2. Scan class QR (`mode: class_session`).
+3. Enter display name + choose part (S/A/T/B), then join session.
+4. Select a practice preset and practice with locked controls:
+   - Play/Pause
+   - Back 1 / Back 2
+   - Loop toggle (if enabled by teacher preset)
+   - Tempo +/- within limited range
+   - Mark Complete
+
+### Student event messages
+
+- `JOIN_CLASS_SESSION`
+- `START_PRACTICE_SESSION`
+- `PRACTICE_EVENT`
+- `PRACTICE_SUMMARY`
+
+Class session logs are stored locally on device (no cloud/auth).

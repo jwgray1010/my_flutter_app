@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'class_session_models.dart';
 import 'models.dart';
 import 'musicxml_parser.dart';
 import 'networking.dart';
@@ -44,13 +47,19 @@ class RehearsalController extends ChangeNotifier {
 
   bool _initialized = false;
   String? _loadedFileName;
+  String _loadedPieceId = 'no_piece';
   String? _errorMessage;
+  ClassSessionState? _classSession;
+  final Map<String, String> _clientIdToDeviceId = <String, String>{};
 
   bool get initialized => _initialized;
   PlaybackEngine get playback => _playback;
   PlaybackController get playbackController => _playbackController;
   String? get loadedFileName => _loadedFileName;
+  String get loadedPieceId => _loadedPieceId;
   String? get errorMessage => _errorMessage;
+  ClassSessionState? get classSession => _classSession;
+  bool get hasActiveClassSession => _classSession != null;
   int get serverPort => _server.port;
   int get announcePort => _server.announcePort;
 
@@ -66,6 +75,7 @@ class RehearsalController extends ChangeNotifier {
       },
       stateBuilder: _buildRemoteState,
       playerNameBuilder: _playerDisplayName,
+      onClientConnectionChanged: _handleClientConnectionChanged,
     );
     _server.broadcastState();
     _initialized = true;
@@ -77,6 +87,103 @@ class RehearsalController extends ChangeNotifier {
       await initialize();
     }
     return _server.buildPairingPayload();
+  }
+
+  Future<Map<String, dynamic>> classSessionPairingPayload() async {
+    final active = _classSession;
+    if (active == null) {
+      throw StateError('No active class session');
+    }
+    return _server.buildPairingPayload(
+      overrideToken: active.pairingToken,
+      extra: <String, dynamic>{
+        'mode': 'class_session',
+        'sessionId': active.sessionId,
+      },
+    );
+  }
+
+  Future<void> startClassSession({
+    String? className,
+  }) async {
+    if (!_initialized) {
+      await initialize();
+    }
+    final token = _newToken();
+    final session = ClassSessionState(
+      sessionId: _newId('session'),
+      className: (className ?? '').trim(),
+      pieceId: _loadedPieceId,
+      createdAt: DateTime.now(),
+      pairingToken: token,
+      practiceSessions: <PracticeSessionPreset>[],
+      rosterByDeviceId: <String, StudentPracticeRecord>{},
+      loopRangeCounts: <String, int>{},
+      measureVisitCounts: <int, int>{},
+      eventLogs: <Map<String, dynamic>>[],
+    );
+    _classSession = session;
+    _clientIdToDeviceId.clear();
+    _server.setClassSessionToken(token);
+    await _persistCurrentClassSession();
+    _broadcastStateAndNotify();
+  }
+
+  Future<void> addPracticeSessionPreset({
+    required String title,
+    required int startMeasure,
+    required int endMeasure,
+    required int tempoPercent,
+    required bool loopEnabled,
+    required Set<ChoirPart> allowedParts,
+    required bool pianoDefaultOn,
+    required bool autoPlayOnStart,
+  }) async {
+    final active = _classSession;
+    if (active == null) {
+      return;
+    }
+    active.practiceSessions.add(
+      PracticeSessionPreset(
+        id: _newId('practice'),
+        title: title.trim().isEmpty ? 'Practice ${active.practiceSessions.length + 1}' : title.trim(),
+        startMeasure: startMeasure,
+        endMeasure: endMeasure,
+        loopEnabled: loopEnabled,
+        tempoPercent: tempoPercent,
+        allowedParts: allowedParts,
+        pianoDefaultOn: pianoDefaultOn,
+        autoPlayOnStart: autoPlayOnStart,
+      ),
+    );
+    await _persistCurrentClassSession();
+    _broadcastStateAndNotify();
+  }
+
+  Future<void> clearClassSession() async {
+    _classSession = null;
+    _clientIdToDeviceId.clear();
+    _server.setClassSessionToken(null);
+    _broadcastStateAndNotify();
+  }
+
+  String buildClassSessionCsv() {
+    final active = _classSession;
+    if (active == null) {
+      return '';
+    }
+    final lines = <String>[
+      'student_name,part,minutes_practiced,sessions_completed,last_activity',
+    ];
+    for (final row in active.rosterByDeviceId.values) {
+      final safeName = row.studentName.replaceAll(',', ' ');
+      final safePart = row.partId.replaceAll(',', ' ');
+      final minutes = (row.totalPracticeSeconds / 60).toStringAsFixed(1);
+      lines.add(
+        '$safeName,$safePart,$minutes,${row.sessionsCompleted},${row.lastActivityAt.toIso8601String()}',
+      );
+    }
+    return lines.join('\n');
   }
 
   Future<void> loadMusicXmlFromPicker() async {
@@ -103,6 +210,7 @@ class RehearsalController extends ChangeNotifier {
       _playback.loadScore(score);
       _playbackController.resetLoopArmed();
       _loadedFileName = file.name;
+      _loadedPieceId = _buildPieceId(xmlContent);
       _errorMessage = null;
       _broadcastStateAndNotify();
     } catch (error) {
@@ -473,6 +581,14 @@ class RehearsalController extends ChangeNotifier {
           applied: true,
           message: 'Play starting pitches',
         );
+      case 'JOIN_CLASS_SESSION':
+        return _handleJoinClassSession(command);
+      case 'START_PRACTICE_SESSION':
+        return _handleStartPracticeSession(command);
+      case 'PRACTICE_EVENT':
+        return _handlePracticeEvent(command);
+      case 'PRACTICE_SUMMARY':
+        return _handlePracticeSummary(command);
       default:
         return const CommandExecutionResult(
           applied: false,
@@ -537,6 +653,7 @@ class RehearsalController extends ChangeNotifier {
       'partsEnabled': _playback.enabledParts.map(_partToProtocol).toList(),
       'measures': score?.measureNumbers ?? <int>[],
       'rehearsalMarks': score?.rehearsalMarks ?? <String, int>{},
+      'activeClassSession': _classSession?.toRemoteMap(),
     };
   }
 
@@ -571,6 +688,278 @@ class RehearsalController extends ChangeNotifier {
       default:
         return choirPartFromId(raw);
     }
+  }
+
+  CommandExecutionResult _handleJoinClassSession(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(
+        applied: false,
+        message: 'No active class session',
+      );
+    }
+    final sessionId = command['sessionId']?.toString() ?? '';
+    if (sessionId != active.sessionId) {
+      return const CommandExecutionResult(
+        applied: false,
+        message: 'Session mismatch',
+      );
+    }
+    final studentName = command['studentName']?.toString().trim() ?? '';
+    final part = command['part']?.toString().toUpperCase() ?? '';
+    final deviceId = command['deviceId']?.toString() ?? '';
+    if (studentName.isEmpty || deviceId.isEmpty) {
+      return const CommandExecutionResult(
+        applied: false,
+        message: 'Missing student identity',
+      );
+    }
+    final clientId = command['_clientId']?.toString();
+    if (clientId != null && clientId.isNotEmpty) {
+      _clientIdToDeviceId[clientId] = deviceId;
+    }
+    final existing = active.rosterByDeviceId[deviceId];
+    final now = DateTime.now();
+    if (existing == null) {
+      active.rosterByDeviceId[deviceId] = StudentPracticeRecord(
+        studentName: studentName,
+        partId: part,
+        deviceId: deviceId,
+        connected: true,
+        status: 'connected',
+        currentMeasure: 1,
+        currentTempo: 100,
+        currentSessionTitle: null,
+        sessionsCompleted: 0,
+        totalPracticeSeconds: 0,
+        lastActivityAt: now,
+        completedSessionIds: <String>{},
+      );
+    } else {
+      existing.connected = true;
+      existing.status = 'connected';
+      existing.lastActivityAt = now;
+    }
+    _logClassEvent(<String, dynamic>{
+      'type': 'JOIN_CLASS_SESSION',
+      'studentName': studentName,
+      'part': part,
+      'deviceId': deviceId,
+      'at': now.toIso8601String(),
+    });
+    unawaited(_persistCurrentClassSession());
+    return const CommandExecutionResult(applied: true, message: 'Joined class session');
+  }
+
+  CommandExecutionResult _handleStartPracticeSession(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(applied: false, message: 'No active class session');
+    }
+    final sessionId = command['sessionId']?.toString() ?? '';
+    if (sessionId != active.sessionId) {
+      return const CommandExecutionResult(applied: false, message: 'Session mismatch');
+    }
+    final practiceSessionId = command['practiceSessionId']?.toString() ?? '';
+    final deviceId = command['deviceId']?.toString() ?? '';
+    final student = active.rosterByDeviceId[deviceId];
+    if (practiceSessionId.isEmpty || student == null) {
+      return const CommandExecutionResult(applied: false, message: 'Unknown student/session');
+    }
+    PracticeSessionPreset? practice;
+    for (final entry in active.practiceSessions) {
+      if (entry.id == practiceSessionId) {
+        practice = entry;
+        break;
+      }
+    }
+    if (practice == null) {
+      return const CommandExecutionResult(applied: false, message: 'Practice not found');
+    }
+    student.status = 'practicing';
+    student.currentSessionTitle = practice.title;
+    student.currentMeasure = practice.minMeasure;
+    student.currentTempo = practice.tempoPercent;
+    student.lastActivityAt = DateTime.now();
+
+    _logClassEvent(<String, dynamic>{
+      'type': 'START_PRACTICE_SESSION',
+      'deviceId': deviceId,
+      'practiceSessionId': practiceSessionId,
+      'title': practice.title,
+      'at': DateTime.now().toIso8601String(),
+    });
+    unawaited(_persistCurrentClassSession());
+    return const CommandExecutionResult(applied: true, message: 'Practice started');
+  }
+
+  CommandExecutionResult _handlePracticeEvent(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(applied: false, message: 'No active class session');
+    }
+    final deviceId = command['deviceId']?.toString() ?? '';
+    final eventType = command['event']?.toString().toUpperCase() ?? '';
+    if (deviceId.isEmpty || eventType.isEmpty) {
+      return const CommandExecutionResult(applied: false, message: 'Malformed practice event');
+    }
+    final student = active.rosterByDeviceId[deviceId];
+    if (student == null) {
+      return const CommandExecutionResult(applied: false, message: 'Unknown student');
+    }
+
+    final now = DateTime.now();
+    student.lastActivityAt = now;
+    if (eventType == 'PLAY') {
+      student.status = 'practicing';
+    } else if (eventType == 'PAUSE') {
+      student.status = 'idle';
+    }
+
+    final currentMeasure = _readInt(command['currentMeasure']);
+    if (currentMeasure != null) {
+      student.currentMeasure = currentMeasure;
+      active.measureVisitCounts[currentMeasure] =
+          (active.measureVisitCounts[currentMeasure] ?? 0) + 1;
+    }
+    final currentTempo = _readInt(command['tempoPercent']);
+    if (currentTempo != null) {
+      student.currentTempo = currentTempo;
+    }
+    final deltaSeconds = _readInt(command['deltaSeconds']);
+    if (deltaSeconds != null && deltaSeconds > 0) {
+      student.totalPracticeSeconds += deltaSeconds;
+    }
+    final loopRange = command['loopRange']?.toString();
+    if (loopRange != null && loopRange.isNotEmpty) {
+      active.loopRangeCounts[loopRange] = (active.loopRangeCounts[loopRange] ?? 0) + 1;
+    }
+    final completed = command['completed'] == true;
+    final completedSessionId = command['practiceSessionId']?.toString();
+    if (completed && completedSessionId != null && completedSessionId.isNotEmpty) {
+      if (student.completedSessionIds.add(completedSessionId)) {
+        student.sessionsCompleted += 1;
+      }
+    }
+
+    _logClassEvent(<String, dynamic>{
+      'type': 'PRACTICE_EVENT',
+      'deviceId': deviceId,
+      'event': eventType,
+      'currentMeasure': student.currentMeasure,
+      'tempoPercent': student.currentTempo,
+      'completed': completed,
+      'practiceSessionId': completedSessionId,
+      'at': now.toIso8601String(),
+    });
+    unawaited(_persistCurrentClassSession());
+    return const CommandExecutionResult(applied: true, message: 'Practice event recorded');
+  }
+
+  CommandExecutionResult _handlePracticeSummary(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(applied: false, message: 'No active class session');
+    }
+    final deviceId = command['deviceId']?.toString() ?? '';
+    final student = active.rosterByDeviceId[deviceId];
+    if (deviceId.isEmpty || student == null) {
+      return const CommandExecutionResult(applied: false, message: 'Unknown student');
+    }
+    final seconds = _readInt(command['timeOnTaskSeconds']);
+    if (seconds != null && seconds > student.totalPracticeSeconds) {
+      student.totalPracticeSeconds = seconds;
+    }
+    final completedRaw = command['completedSessions'];
+    if (completedRaw is List) {
+      for (final id in completedRaw) {
+        student.completedSessionIds.add(id.toString());
+      }
+      student.sessionsCompleted = student.completedSessionIds.length;
+    }
+    final measuresRaw = command['measuresVisited'];
+    if (measuresRaw is List) {
+      for (final measure in measuresRaw) {
+        final parsed = _readInt(measure);
+        if (parsed != null) {
+          active.measureVisitCounts[parsed] = (active.measureVisitCounts[parsed] ?? 0) + 1;
+        }
+      }
+    }
+    student.lastActivityAt = DateTime.now();
+    _logClassEvent(<String, dynamic>{
+      'type': 'PRACTICE_SUMMARY',
+      'deviceId': deviceId,
+      'timeOnTaskSeconds': student.totalPracticeSeconds,
+      'sessionsCompleted': student.sessionsCompleted,
+      'at': DateTime.now().toIso8601String(),
+    });
+    unawaited(_persistCurrentClassSession());
+    return const CommandExecutionResult(applied: true, message: 'Summary recorded');
+  }
+
+  Future<void> _persistCurrentClassSession() async {
+    final active = _classSession;
+    if (active == null) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'choir_class_session_${active.sessionId}',
+      jsonEncode(active.toMap()),
+    );
+  }
+
+  void _logClassEvent(Map<String, dynamic> event) {
+    final active = _classSession;
+    if (active == null) {
+      return;
+    }
+    active.eventLogs.add(event);
+    if (active.eventLogs.length > 3000) {
+      active.eventLogs.removeRange(0, active.eventLogs.length - 3000);
+    }
+  }
+
+  void _handleClientConnectionChanged(String clientId, bool connected) {
+    final active = _classSession;
+    if (active == null) {
+      return;
+    }
+    final deviceId = _clientIdToDeviceId[clientId];
+    if (deviceId == null) {
+      return;
+    }
+    final student = active.rosterByDeviceId[deviceId];
+    if (student == null) {
+      return;
+    }
+    student.connected = connected;
+    student.status = connected ? student.status : 'idle';
+    student.lastActivityAt = DateTime.now();
+    _broadcastStateAndNotify();
+  }
+
+  String _buildPieceId(String xmlContent) {
+    final bytes = utf8.encode(xmlContent);
+    var hash = 2166136261;
+    for (final byte in bytes) {
+      hash ^= byte;
+      hash = (hash * 16777619) & 0xFFFFFFFF;
+    }
+    return hash.toRadixString(16).padLeft(8, '0');
+  }
+
+  String _newId(String prefix) {
+    final now = DateTime.now().microsecondsSinceEpoch;
+    final randomValue = Random.secure().nextInt(1 << 32);
+    return '${prefix}_$now$randomValue';
+  }
+
+  String _newToken() {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rng = Random.secure();
+    return List<String>.generate(24, (_) => chars[rng.nextInt(chars.length)]).join();
   }
 }
 
