@@ -65,6 +65,285 @@ class PracticeSessionPreset {
   }
 }
 
+class StationPracticeSessionConfig {
+  StationPracticeSessionConfig({
+    required this.id,
+    required this.title,
+    required this.startMeasure,
+    required this.endMeasure,
+    required this.defaultTempoPercent,
+    this.allowTempoAdjust = true,
+    this.tempoMinPercent = 50,
+    this.tempoMaxPercent = 100,
+    this.loopDefaultOn = true,
+    this.allowCustomLoopPoints = true,
+    this.navBackForwardAllowed = true,
+    this.navStepMeasures = 2,
+    this.allowJumpToAnyMeasureInRange = true,
+    this.lockRangeStrict = true,
+  });
+
+  final String id;
+  final String title;
+  final int startMeasure;
+  final int endMeasure;
+  final int defaultTempoPercent;
+  final bool allowTempoAdjust;
+  final int tempoMinPercent;
+  final int tempoMaxPercent;
+  final bool loopDefaultOn;
+  final bool allowCustomLoopPoints;
+  final bool navBackForwardAllowed;
+  final int navStepMeasures;
+  final bool allowJumpToAnyMeasureInRange;
+  final bool lockRangeStrict;
+
+  int get minMeasure => startMeasure <= endMeasure ? startMeasure : endMeasure;
+  int get maxMeasure => startMeasure <= endMeasure ? endMeasure : startMeasure;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'title': title,
+      'startMeasure': startMeasure,
+      'endMeasure': endMeasure,
+      'defaultTempoPercent': defaultTempoPercent,
+      'allowTempoAdjust': allowTempoAdjust,
+      'tempoMinPercent': tempoMinPercent,
+      'tempoMaxPercent': tempoMaxPercent,
+      'loopDefaultOn': loopDefaultOn,
+      'allowCustomLoopPoints': allowCustomLoopPoints,
+      'navBackForwardAllowed': navBackForwardAllowed,
+      'navStepMeasures': navStepMeasures,
+      'allowJumpToAnyMeasureInRange': allowJumpToAnyMeasureInRange,
+      'lockRangeStrict': lockRangeStrict,
+    };
+  }
+
+  factory StationPracticeSessionConfig.fromMap(Map<String, dynamic> map) {
+    return StationPracticeSessionConfig(
+      id: map['id']?.toString() ?? '',
+      title: map['title']?.toString() ?? '',
+      startMeasure: _toInt(map['startMeasure']) ?? 1,
+      endMeasure: _toInt(map['endMeasure']) ?? 1,
+      defaultTempoPercent: _toInt(map['defaultTempoPercent']) ?? 70,
+      allowTempoAdjust: map['allowTempoAdjust'] != false,
+      tempoMinPercent: _toInt(map['tempoMinPercent']) ?? 50,
+      tempoMaxPercent: _toInt(map['tempoMaxPercent']) ?? 100,
+      loopDefaultOn: map['loopDefaultOn'] != false,
+      allowCustomLoopPoints: map['allowCustomLoopPoints'] != false,
+      navBackForwardAllowed: map['navBackForwardAllowed'] != false,
+      navStepMeasures: _toInt(map['navStepMeasures']) ?? 2,
+      allowJumpToAnyMeasureInRange: map['allowJumpToAnyMeasureInRange'] != false,
+      lockRangeStrict: map['lockRangeStrict'] != false,
+    );
+  }
+}
+
+class StationConfig {
+  StationConfig({
+    required this.stationId,
+    required this.stationName,
+    required this.lockedPart,
+    required this.practiceSession,
+    this.stationPasscode,
+    this.deviceId,
+  });
+
+  final String stationId;
+  String stationName;
+  final ChoirPart lockedPart;
+  StationPracticeSessionConfig practiceSession;
+  final String? stationPasscode;
+  String? deviceId;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'stationId': stationId,
+      'stationName': stationName,
+      'lockedPart': _stationPartCode(lockedPart),
+      'practiceSession': practiceSession.toMap(),
+      'stationPasscode': stationPasscode,
+      'deviceId': deviceId,
+    };
+  }
+
+  factory StationConfig.fromMap(Map<String, dynamic> map) {
+    final lockedRaw = map['lockedPart']?.toString() ?? 'ALTO';
+    final lockedPart = _partFromStationRaw(lockedRaw) ?? ChoirPart.alto;
+    final practiceRaw = map['practiceSession'];
+    final practice = practiceRaw is Map
+        ? StationPracticeSessionConfig.fromMap(practiceRaw.cast<String, dynamic>())
+        : StationPracticeSessionConfig(
+            id: '',
+            title: '',
+            startMeasure: 1,
+            endMeasure: 8,
+            defaultTempoPercent: 70,
+          );
+    return StationConfig(
+      stationId: map['stationId']?.toString() ?? '',
+      stationName: map['stationName']?.toString() ?? '',
+      lockedPart: lockedPart,
+      practiceSession: practice,
+      stationPasscode: map['stationPasscode']?.toString(),
+      deviceId: map['deviceId']?.toString(),
+    );
+  }
+}
+
+class StationRuntimeStatus {
+  StationRuntimeStatus({
+    required this.stationId,
+    required this.stationName,
+    required this.lockedPart,
+    this.activeStudentName,
+    this.activeAttemptId,
+    this.currentMeasure = 1,
+    this.tempoPercent = 100,
+    this.loopEnabled = false,
+    this.loopA,
+    this.loopB,
+    this.studentsCompleted = 0,
+    this.totalPracticeSeconds = 0,
+    this.connected = false,
+    DateTime? lastActivityAt,
+  }) : lastActivityAt = lastActivityAt ?? DateTime.now();
+
+  final String stationId;
+  String stationName;
+  final ChoirPart lockedPart;
+  String? activeStudentName;
+  String? activeAttemptId;
+  int currentMeasure;
+  int tempoPercent;
+  bool loopEnabled;
+  int? loopA;
+  int? loopB;
+  int studentsCompleted;
+  int totalPracticeSeconds;
+  bool connected;
+  DateTime lastActivityAt;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'stationId': stationId,
+      'stationName': stationName,
+      'lockedPart': _stationPartCode(lockedPart),
+      'activeStudentName': activeStudentName,
+      'activeAttemptId': activeAttemptId,
+      'currentMeasure': currentMeasure,
+      'tempoPercent': tempoPercent,
+      'loopEnabled': loopEnabled,
+      'loopA': loopA,
+      'loopB': loopB,
+      'studentsCompleted': studentsCompleted,
+      'totalPracticeSeconds': totalPracticeSeconds,
+      'connected': connected,
+      'lastActivityAt': lastActivityAt.toIso8601String(),
+    };
+  }
+
+  factory StationRuntimeStatus.fromMap(Map<String, dynamic> map) {
+    return StationRuntimeStatus(
+      stationId: map['stationId']?.toString() ?? '',
+      stationName: map['stationName']?.toString() ?? '',
+      lockedPart: _partFromStationRaw(map['lockedPart']?.toString() ?? '') ??
+          ChoirPart.alto,
+      activeStudentName: map['activeStudentName']?.toString(),
+      activeAttemptId: map['activeAttemptId']?.toString(),
+      currentMeasure: _toInt(map['currentMeasure']) ?? 1,
+      tempoPercent: _toInt(map['tempoPercent']) ?? 100,
+      loopEnabled: map['loopEnabled'] == true,
+      loopA: _toInt(map['loopA']),
+      loopB: _toInt(map['loopB']),
+      studentsCompleted: _toInt(map['studentsCompleted']) ?? 0,
+      totalPracticeSeconds: _toInt(map['totalPracticeSeconds']) ?? 0,
+      connected: map['connected'] == true,
+      lastActivityAt: DateTime.tryParse(map['lastActivityAt']?.toString() ?? '') ??
+          DateTime.now(),
+    );
+  }
+}
+
+class StationAttemptSummary {
+  StationAttemptSummary({
+    required this.attemptId,
+    required this.sessionId,
+    required this.stationId,
+    required this.stationName,
+    required this.studentName,
+    required this.lockedPart,
+    required this.startedAt,
+    this.endedAt,
+    this.timeOnTaskSeconds = 0,
+    this.measuresVisitedMin,
+    this.measuresVisitedMax,
+    this.loopReps = 0,
+    this.tempoMinUsed,
+    this.tempoMaxUsed,
+    this.completed = false,
+  });
+
+  final String attemptId;
+  final String sessionId;
+  final String stationId;
+  final String stationName;
+  final String studentName;
+  final ChoirPart lockedPart;
+  final DateTime startedAt;
+  DateTime? endedAt;
+  int timeOnTaskSeconds;
+  int? measuresVisitedMin;
+  int? measuresVisitedMax;
+  int loopReps;
+  int? tempoMinUsed;
+  int? tempoMaxUsed;
+  bool completed;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'attemptId': attemptId,
+      'sessionId': sessionId,
+      'stationId': stationId,
+      'stationName': stationName,
+      'studentName': studentName,
+      'lockedPart': _stationPartCode(lockedPart),
+      'startedAt': startedAt.toIso8601String(),
+      'endedAt': endedAt?.toIso8601String(),
+      'timeOnTaskSeconds': timeOnTaskSeconds,
+      'measuresVisitedMin': measuresVisitedMin,
+      'measuresVisitedMax': measuresVisitedMax,
+      'loopReps': loopReps,
+      'tempoMinUsed': tempoMinUsed,
+      'tempoMaxUsed': tempoMaxUsed,
+      'completed': completed,
+    };
+  }
+
+  factory StationAttemptSummary.fromMap(Map<String, dynamic> map) {
+    return StationAttemptSummary(
+      attemptId: map['attemptId']?.toString() ?? '',
+      sessionId: map['sessionId']?.toString() ?? '',
+      stationId: map['stationId']?.toString() ?? '',
+      stationName: map['stationName']?.toString() ?? '',
+      studentName: map['studentName']?.toString() ?? '',
+      lockedPart: _partFromStationRaw(map['lockedPart']?.toString() ?? '') ??
+          ChoirPart.alto,
+      startedAt: DateTime.tryParse(map['startedAt']?.toString() ?? '') ??
+          DateTime.now(),
+      endedAt: DateTime.tryParse(map['endedAt']?.toString() ?? ''),
+      timeOnTaskSeconds: _toInt(map['timeOnTaskSeconds']) ?? 0,
+      measuresVisitedMin: _toInt(map['measuresVisitedMin']),
+      measuresVisitedMax: _toInt(map['measuresVisitedMax']),
+      loopReps: _toInt(map['loopReps']) ?? 0,
+      tempoMinUsed: _toInt(map['tempoMinUsed']),
+      tempoMaxUsed: _toInt(map['tempoMaxUsed']),
+      completed: map['completed'] == true,
+    );
+  }
+}
+
 class StudentPracticeRecord {
   StudentPracticeRecord({
     required this.studentName,
@@ -140,12 +419,22 @@ class ClassSessionState {
     required this.pieceId,
     required this.createdAt,
     required this.pairingToken,
-    required this.practiceSessions,
-    required this.rosterByDeviceId,
-    required this.loopRangeCounts,
-    required this.measureVisitCounts,
-    required this.eventLogs,
-  });
+    List<PracticeSessionPreset>? practiceSessions,
+    Map<String, StudentPracticeRecord>? rosterByDeviceId,
+    Map<String, int>? loopRangeCounts,
+    Map<int, int>? measureVisitCounts,
+    List<Map<String, dynamic>>? eventLogs,
+    Map<String, StationConfig>? stationsById,
+    Map<String, StationRuntimeStatus>? stationRuntimeById,
+    List<StationAttemptSummary>? stationAttempts,
+  }) : practiceSessions = practiceSessions ?? <PracticeSessionPreset>[],
+       rosterByDeviceId = rosterByDeviceId ?? <String, StudentPracticeRecord>{},
+       loopRangeCounts = loopRangeCounts ?? <String, int>{},
+       measureVisitCounts = measureVisitCounts ?? <int, int>{},
+       eventLogs = eventLogs ?? <Map<String, dynamic>>[],
+       stationsById = stationsById ?? <String, StationConfig>{},
+       stationRuntimeById = stationRuntimeById ?? <String, StationRuntimeStatus>{},
+       stationAttempts = stationAttempts ?? <StationAttemptSummary>[];
 
   final String sessionId;
   final String className;
@@ -157,6 +446,15 @@ class ClassSessionState {
   final Map<String, int> loopRangeCounts;
   final Map<int, int> measureVisitCounts;
   final List<Map<String, dynamic>> eventLogs;
+  final Map<String, StationConfig> stationsById;
+  final Map<String, StationRuntimeStatus> stationRuntimeById;
+  final List<StationAttemptSummary> stationAttempts;
+
+  List<StationConfig> sortedStations() {
+    final list = stationsById.values.toList();
+    list.sort((a, b) => a.stationName.compareTo(b.stationName));
+    return list;
+  }
 
   Map<String, dynamic> toMap() {
     return <String, dynamic>{
@@ -174,6 +472,13 @@ class ClassSessionState {
         (key, value) => MapEntry<String, dynamic>(key.toString(), value),
       ),
       'eventLogs': eventLogs,
+      'stationsById': stationsById.map(
+        (key, value) => MapEntry<String, dynamic>(key, value.toMap()),
+      ),
+      'stationRuntimeById': stationRuntimeById.map(
+        (key, value) => MapEntry<String, dynamic>(key, value.toMap()),
+      ),
+      'stationAttempts': stationAttempts.map((entry) => entry.toMap()).toList(),
     };
   }
 
@@ -188,7 +493,24 @@ class ClassSessionState {
       'measureVisitCounts': measureVisitCounts.map(
         (key, value) => MapEntry<String, dynamic>(key.toString(), value),
       ),
+      'stations': stationsById.values.map((station) => station.toMap()).toList(),
+      'stationRuntime': stationRuntimeById.values.map((entry) => entry.toMap()).toList(),
+      'stationSummary': _buildStationSummaryMap(),
     };
+  }
+
+  Map<String, dynamic> _buildStationSummaryMap() {
+    final summary = <String, dynamic>{};
+    for (final station in stationsById.values) {
+      final attempts = stationAttempts.where((entry) => entry.stationId == station.stationId);
+      final completed = attempts.where((entry) => entry.completed).length;
+      final totalSeconds = attempts.fold<int>(0, (sum, entry) => sum + entry.timeOnTaskSeconds);
+      summary[station.stationId] = <String, dynamic>{
+        'studentsCompleted': completed,
+        'totalPracticeSeconds': totalSeconds,
+      };
+    }
+    return summary;
   }
 
   factory ClassSessionState.fromMap(Map<String, dynamic> map) {
@@ -197,6 +519,9 @@ class ClassSessionState {
     final loopRaw = map['loopRangeCounts'];
     final measureRaw = map['measureVisitCounts'];
     final logsRaw = map['eventLogs'];
+    final stationsRaw = map['stationsById'];
+    final runtimeRaw = map['stationRuntimeById'];
+    final attemptsRaw = map['stationAttempts'];
 
     final practiceSessions = <PracticeSessionPreset>[];
     if (practiceRaw is List) {
@@ -251,6 +576,41 @@ class ClassSessionState {
       }
     }
 
+    final stationsById = <String, StationConfig>{};
+    if (stationsRaw is Map) {
+      for (final entry in stationsRaw.entries) {
+        final value = entry.value;
+        if (value is Map) {
+          stationsById[entry.key.toString()] = StationConfig.fromMap(
+            value.cast<String, dynamic>(),
+          );
+        }
+      }
+    }
+
+    final stationRuntimeById = <String, StationRuntimeStatus>{};
+    if (runtimeRaw is Map) {
+      for (final entry in runtimeRaw.entries) {
+        final value = entry.value;
+        if (value is Map) {
+          stationRuntimeById[entry.key.toString()] = StationRuntimeStatus.fromMap(
+            value.cast<String, dynamic>(),
+          );
+        }
+      }
+    }
+
+    final stationAttempts = <StationAttemptSummary>[];
+    if (attemptsRaw is List) {
+      for (final entry in attemptsRaw) {
+        if (entry is Map) {
+          stationAttempts.add(
+            StationAttemptSummary.fromMap(entry.cast<String, dynamic>()),
+          );
+        }
+      }
+    }
+
     return ClassSessionState(
       sessionId: map['sessionId']?.toString() ?? '',
       className: map['className']?.toString() ?? '',
@@ -263,6 +623,9 @@ class ClassSessionState {
       loopRangeCounts: loopRangeCounts,
       measureVisitCounts: measureVisitCounts,
       eventLogs: eventLogs,
+      stationsById: stationsById,
+      stationRuntimeById: stationRuntimeById,
+      stationAttempts: stationAttempts,
     );
   }
 }
@@ -278,5 +641,37 @@ int? _toInt(Object? value) {
     return int.tryParse(value);
   }
   return null;
+}
+
+ChoirPart? _partFromStationRaw(String raw) {
+  final value = raw.trim().toUpperCase();
+  switch (value) {
+    case 'SOP':
+    case 'SOPRANO':
+      return ChoirPart.soprano;
+    case 'ALTO':
+      return ChoirPart.alto;
+    case 'TENOR':
+      return ChoirPart.tenor;
+    case 'BASS':
+      return ChoirPart.bass;
+    default:
+      return choirPartFromId(raw);
+  }
+}
+
+String _stationPartCode(ChoirPart part) {
+  switch (part) {
+    case ChoirPart.soprano:
+      return 'SOP';
+    case ChoirPart.alto:
+      return 'ALTO';
+    case ChoirPart.tenor:
+      return 'TENOR';
+    case ChoirPart.bass:
+      return 'BASS';
+    case ChoirPart.piano:
+      return 'PIANO';
+  }
 }
 

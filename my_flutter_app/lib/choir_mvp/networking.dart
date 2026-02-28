@@ -370,7 +370,10 @@ class LocalPlayerServer {
   }
 
   bool _isStudentEventType(String type) {
-    return type == 'JOIN_CLASS_SESSION' ||
+    return type == 'REGISTER_STATION' ||
+        type == 'JOIN_STATION' ||
+        type == 'PRACTICE_COMPLETED' ||
+        type == 'JOIN_CLASS_SESSION' ||
         type == 'START_PRACTICE_SESSION' ||
         type == 'PRACTICE_EVENT' ||
         type == 'PRACTICE_SUMMARY';
@@ -446,6 +449,11 @@ class PlayerPairingProfile {
     required this.token,
     this.mode,
     this.sessionId,
+    this.stationId,
+    this.stationName,
+    this.lockedPart,
+    this.stationPasscode,
+    this.practice,
   });
 
   final String name;
@@ -454,6 +462,11 @@ class PlayerPairingProfile {
   final String token;
   final String? mode;
   final String? sessionId;
+  final String? stationId;
+  final String? stationName;
+  final String? lockedPart;
+  final String? stationPasscode;
+  final Map<String, dynamic>? practice;
 
   factory PlayerPairingProfile.fromMap(Map<String, dynamic> map) {
     return PlayerPairingProfile(
@@ -465,6 +478,13 @@ class PlayerPairingProfile {
       token: map['token']?.toString() ?? '',
       mode: map['mode']?.toString(),
       sessionId: map['sessionId']?.toString(),
+      stationId: map['stationId']?.toString(),
+      stationName: map['stationName']?.toString(),
+      lockedPart: map['lockedPart']?.toString(),
+      stationPasscode: map['stationPasscode']?.toString(),
+      practice: map['practice'] is Map
+          ? (map['practice'] as Map).cast<String, dynamic>()
+          : null,
     );
   }
 
@@ -475,6 +495,11 @@ class PlayerPairingProfile {
     'token': token,
     if (mode != null) 'mode': mode,
     if (sessionId != null) 'sessionId': sessionId,
+    if (stationId != null) 'stationId': stationId,
+    if (stationName != null) 'stationName': stationName,
+    if (lockedPart != null) 'lockedPart': lockedPart,
+    if (stationPasscode != null) 'stationPasscode': stationPasscode,
+    if (practice != null) 'practice': practice,
   };
 }
 
@@ -610,6 +635,13 @@ class RemoteClient extends ChangeNotifier {
       port: profile.port,
       token: profile.token,
       name: profile.name,
+      mode: profile.mode,
+      sessionId: profile.sessionId,
+      stationId: profile.stationId,
+      stationName: profile.stationName,
+      lockedPart: profile.lockedPart,
+      stationPasscode: profile.stationPasscode,
+      practice: profile.practice,
       persist: true,
     );
   }
@@ -619,6 +651,13 @@ class RemoteClient extends ChangeNotifier {
     required int port,
     String? token,
     String? name,
+    String? mode,
+    String? sessionId,
+    String? stationId,
+    String? stationName,
+    String? lockedPart,
+    String? stationPasscode,
+    Map<String, dynamic>? practice,
     bool persist = false,
   }) async {
     if (_connecting) {
@@ -644,6 +683,13 @@ class RemoteClient extends ChangeNotifier {
       ip: host,
       port: port,
       token: effectiveToken,
+      mode: mode ?? _pairedProfile?.mode,
+      sessionId: sessionId ?? _pairedProfile?.sessionId,
+      stationId: stationId ?? _pairedProfile?.stationId,
+      stationName: stationName ?? _pairedProfile?.stationName,
+      lockedPart: lockedPart ?? _pairedProfile?.lockedPart,
+      stationPasscode: stationPasscode ?? _pairedProfile?.stationPasscode,
+      practice: practice ?? _pairedProfile?.practice,
     );
     _pairedProfile = profile;
     if (persist) {

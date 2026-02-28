@@ -97,3 +97,45 @@ Voice control is push-to-talk only (no always-listening mode).
 - `PRACTICE_SUMMARY`
 
 Class session logs are stored locally on device (no cloud/auth).
+
+## Station Mode (Single-Session Stations)
+
+Station Mode replaces the broader student-session flow with a simpler in-school setup:
+
+### Teacher (iPad Player)
+
+1. Start a class session.
+2. Open **Teacher View** and configure stations (S/A/T/B), each with exactly one locked range.
+3. For each station, set:
+   - Station name
+   - Start / end measure
+   - Default tempo
+   - Loop default on/off
+4. Tap **Generate Station QR** for each station.
+
+### Station device (iPhone)
+
+1. Open **Station Mode**.
+2. Scan station QR once (`mode: station_single`).
+3. Students rotate:
+   - tap **I'M STARTING**
+   - enter name
+   - practice with locked controls in assigned range
+   - tap **DONE / NEXT STUDENT**
+
+### Station controls
+
+- Play/Pause
+- Back/Forward step (default 2 measures)
+- Tempo +/- (clamped)
+- Loop toggle, Set A, Set B, Clear loop
+- Optional in-range measure grid (when enabled)
+- Strict range lock clamps out-of-range movement
+
+### Station event messages
+
+- `REGISTER_STATION`
+- `JOIN_STATION`
+- `PRACTICE_EVENT`
+- `PRACTICE_SUMMARY`
+- `PRACTICE_COMPLETED`

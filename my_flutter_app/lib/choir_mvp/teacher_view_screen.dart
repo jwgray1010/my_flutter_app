@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'class_session_models.dart';
@@ -47,9 +50,11 @@ class _TeacherViewScreenState extends State<TeacherViewScreen> {
                     child: const Text('Start Class Session'),
                   ),
                 )
-              : _TeacherDashboard(
+              : _StationTeacherDashboard(
                   session: session,
-                  onAddPracticeSession: _showAddPracticeDialog,
+                  controller: widget.controller,
+                  onEditStation: _showEditStationDialog,
+                  onShowStationQr: _showStationQr,
                 ),
         );
       },
@@ -90,14 +95,18 @@ class _TeacherViewScreenState extends State<TeacherViewScreen> {
     );
   }
 
-  Future<void> _showAddPracticeDialog() async {
-    final titleController = TextEditingController();
-    final startController = TextEditingController(text: '1');
-    final endController = TextEditingController(text: '8');
-    final tempoController = TextEditingController(text: '80');
-    var loopEnabled = true;
-    var selectedPart = ChoirPart.alto;
-    var autoPlay = true;
+  Future<void> _showEditStationDialog(StationConfig station) async {
+    final nameController = TextEditingController(text: station.stationName);
+    final startController = TextEditingController(
+      text: '${station.practiceSession.minMeasure}',
+    );
+    final endController = TextEditingController(
+      text: '${station.practiceSession.maxMeasure}',
+    );
+    final tempoController = TextEditingController(
+      text: '${station.practiceSession.defaultTempoPercent}',
+    );
+    var loopDefaultOn = station.practiceSession.loopDefaultOn;
 
     await showDialog<void>(
       context: context,
@@ -105,59 +114,38 @@ class _TeacherViewScreenState extends State<TeacherViewScreen> {
         return StatefulBuilder(
           builder: (context, setStateDialog) {
             return AlertDialog(
-              title: const Text('Add Practice Session'),
+              title: Text('Edit ${station.stationName}'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     TextField(
-                      controller: titleController,
-                      decoration: const InputDecoration(labelText: 'Title'),
+                      controller: nameController,
+                      decoration: const InputDecoration(labelText: 'Station name'),
                     ),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: startController,
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(labelText: 'Start measure'),
                     ),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: endController,
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(labelText: 'End measure'),
                     ),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: tempoController,
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Tempo %'),
-                    ),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<ChoirPart>(
-                      value: selectedPart,
-                      decoration: const InputDecoration(labelText: 'Student part'),
-                      items: const [
-                        DropdownMenuItem(value: ChoirPart.soprano, child: Text('Soprano')),
-                        DropdownMenuItem(value: ChoirPart.alto, child: Text('Alto')),
-                        DropdownMenuItem(value: ChoirPart.tenor, child: Text('Tenor')),
-                        DropdownMenuItem(value: ChoirPart.bass, child: Text('Bass')),
-                      ],
-                      onChanged: (value) {
-                        if (value != null) {
-                          setStateDialog(() {
-                            selectedPart = value;
-                          });
-                        }
-                      },
+                      decoration: const InputDecoration(labelText: 'Default tempo %'),
                     ),
                     SwitchListTile(
-                      title: const Text('Loop enabled'),
                       contentPadding: EdgeInsets.zero,
-                      value: loopEnabled,
-                      onChanged: (value) => setStateDialog(() => loopEnabled = value),
-                    ),
-                    SwitchListTile(
-                      title: const Text('Auto-play on start'),
-                      contentPadding: EdgeInsets.zero,
-                      value: autoPlay,
-                      onChanged: (value) => setStateDialog(() => autoPlay = value),
+                      title: const Text('Loop default ON'),
+                      value: loopDefaultOn,
+                      onChanged: (value) => setStateDialog(() => loopDefaultOn = value),
                     ),
                   ],
                 ),
@@ -171,27 +159,67 @@ class _TeacherViewScreenState extends State<TeacherViewScreen> {
                   onPressed: () async {
                     final start = int.tryParse(startController.text.trim()) ?? 1;
                     final end = int.tryParse(endController.text.trim()) ?? start;
-                    final tempo = (int.tryParse(tempoController.text.trim()) ?? 80).clamp(50, 100);
-                    await widget.controller.addPracticeSessionPreset(
-                      title: titleController.text.trim(),
+                    final tempo = int.tryParse(tempoController.text.trim()) ?? 70;
+                    await widget.controller.updateStationConfig(
+                      stationId: station.stationId,
+                      stationName: nameController.text.trim(),
                       startMeasure: start,
                       endMeasure: end,
-                      tempoPercent: tempo,
-                      loopEnabled: loopEnabled,
-                      allowedParts: <ChoirPart>{selectedPart},
-                      pianoDefaultOn: true,
-                      autoPlayOnStart: autoPlay,
+                      defaultTempoPercent: tempo,
+                      loopDefaultOn: loopDefaultOn,
                     );
                     if (!mounted) {
                       return;
                     }
                     Navigator.of(context).pop();
                   },
-                  child: const Text('Add'),
+                  child: const Text('Save'),
                 ),
               ],
             );
           },
+        );
+      },
+    );
+  }
+
+  Future<void> _showStationQr(StationConfig station) async {
+    final payload = await widget.controller.stationPairingPayload(station.stationId);
+    if (!mounted) {
+      return;
+    }
+    final qrData = jsonEncode(payload);
+    final pretty = const JsonEncoder.withIndent('  ').convert(payload);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '${station.stationName} QR',
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                QrImageView(
+                  data: qrData,
+                  version: QrVersions.auto,
+                  size: 260,
+                  foregroundColor: Colors.white,
+                  backgroundColor: Colors.black,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  pretty,
+                  style: const TextStyle(fontSize: 12, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
         );
       },
     );
@@ -204,29 +232,27 @@ class _TeacherViewScreenState extends State<TeacherViewScreen> {
     }
     await Share.share(
       csv,
-      subject: 'Choir Class Session Report',
+      subject: 'Station Mode Class Session Report',
     );
   }
 }
 
-class _TeacherDashboard extends StatelessWidget {
-  const _TeacherDashboard({
+class _StationTeacherDashboard extends StatelessWidget {
+  const _StationTeacherDashboard({
     required this.session,
-    required this.onAddPracticeSession,
+    required this.controller,
+    required this.onEditStation,
+    required this.onShowStationQr,
   });
 
   final ClassSessionState session;
-  final VoidCallback onAddPracticeSession;
+  final RehearsalController controller;
+  final Future<void> Function(StationConfig station) onEditStation;
+  final Future<void> Function(StationConfig station) onShowStationQr;
 
   @override
   Widget build(BuildContext context) {
-    final roster = session.rosterByDeviceId.values.toList()
-      ..sort((a, b) => a.studentName.compareTo(b.studentName));
-    final topLooped = session.loopRangeCounts.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final topMeasures = session.measureVisitCounts.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
+    final stations = session.sortedStations();
     return SingleChildScrollView(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -245,102 +271,115 @@ class _TeacherDashboard extends StatelessWidget {
                   Text('Session ID: ${session.sessionId}'),
                   Text('Created: ${session.createdAt.toIso8601String()}'),
                   const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: onAddPracticeSession,
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add Practice Session'),
-                  ),
+                  const Text('Stations configured for single locked session each.'),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 10),
           const Text(
-            'Practice Sessions',
+            'Stations',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
-          if (session.practiceSessions.isEmpty)
-            const Text('No practice sessions yet.')
-          else
-            ...session.practiceSessions.map(
-              (practice) => ListTile(
-                dense: true,
-                title: Text(practice.title),
-                subtitle: Text(
-                  'mm.${practice.minMeasure}-${practice.maxMeasure}  Tempo ${practice.tempoPercent}%'
-                  '${practice.loopEnabled ? '  Loop' : ''}',
-                ),
-              ),
-            ),
-          const SizedBox(height: 10),
-          const Text(
-            'Live Roster',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
-          if (roster.isEmpty)
-            const Text('No students joined yet.')
-          else
-            DataTable(
-              columns: const [
-                DataColumn(label: Text('Student')),
-                DataColumn(label: Text('Part')),
-                DataColumn(label: Text('Status')),
-                DataColumn(label: Text('Measure')),
-                DataColumn(label: Text('Tempo')),
-                DataColumn(label: Text('Session')),
-              ],
-              rows: roster
-                  .map(
-                    (row) => DataRow(
-                      cells: [
-                        DataCell(Text(row.studentName)),
-                        DataCell(Text(row.partId)),
-                        DataCell(Text(row.connected ? row.status : 'disconnected')),
-                        DataCell(Text('${row.currentMeasure}')),
-                        DataCell(Text('${row.currentTempo}%')),
-                        DataCell(Text(row.currentSessionTitle ?? '-')),
-                      ],
-                    ),
-                  )
-                  .toList(),
-            ),
-          const SizedBox(height: 10),
-          const Text(
-            'Completion Summary',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
-          ...roster.map(
-            (row) => ListTile(
-              dense: true,
-              title: Text(row.studentName),
-              subtitle: Text(
-                'Completed: ${row.sessionsCompleted}  '
-                'Minutes: ${(row.totalPracticeSeconds / 60).toStringAsFixed(1)}  '
-                'Last: ${row.lastActivityAt.toIso8601String()}',
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'Trouble Spots',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
-          const Text('Top looped ranges'),
-          ...topLooped.take(10).map(
-            (entry) => Text('${entry.key}: ${entry.value}'),
           ),
           const SizedBox(height: 8),
-          const Text('Top visited measures'),
-          ...topMeasures.take(10).map(
-            (entry) => Text('m.${entry.key}: ${entry.value}'),
-          ),
+          if (stations.isEmpty)
+            const Text('No stations configured.')
+          else
+            ...stations.map(
+              (station) {
+                final runtime = controller.stationRuntime(station.stationId);
+                final attempts = session.stationAttempts
+                    .where((entry) => entry.stationId == station.stationId)
+                    .toList();
+                final completed = attempts.where((entry) => entry.completed).length;
+                final totalSeconds = attempts.fold<int>(
+                  0,
+                  (sum, entry) => sum + entry.timeOnTaskSeconds,
+                );
+                return Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                station.stationName,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            Text(_stationPartCode(station.lockedPart)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Practice mm.${station.practiceSession.minMeasure}-${station.practiceSession.maxMeasure}  '
+                          'Tempo ${station.practiceSession.defaultTempoPercent}%  '
+                          '${station.practiceSession.loopDefaultOn ? 'Loop ON' : 'Loop OFF'}',
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            ElevatedButton.icon(
+                              onPressed: () => onEditStation(station),
+                              icon: const Icon(Icons.edit),
+                              label: const Text('Edit'),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: () => onShowStationQr(station),
+                              icon: const Icon(Icons.qr_code),
+                              label: const Text('Generate Station QR'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Active student: ${runtime?.activeStudentName ?? '-'}',
+                        ),
+                        Text(
+                          'Current measure: ${runtime?.currentMeasure ?? station.practiceSession.minMeasure}',
+                        ),
+                        Text('Tempo: ${runtime?.tempoPercent ?? station.practiceSession.defaultTempoPercent}%'),
+                        Text(
+                          'Loop: ${(runtime?.loopEnabled ?? false) ? 'ON ${runtime?.loopA ?? '-'}-${runtime?.loopB ?? '-'}' : 'OFF'}',
+                        ),
+                        Text('Connected: ${(runtime?.connected ?? false) ? 'Yes' : 'No'}'),
+                        const SizedBox(height: 6),
+                        Text('Students completed today: $completed'),
+                        Text(
+                          'Total minutes practiced: ${(totalSeconds / 60).toStringAsFixed(1)}',
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );
+  }
+}
+
+String _stationPartCode(ChoirPart part) {
+  switch (part) {
+    case ChoirPart.soprano:
+      return 'SOP';
+    case ChoirPart.alto:
+      return 'ALTO';
+    case ChoirPart.tenor:
+      return 'TENOR';
+    case ChoirPart.bass:
+      return 'BASS';
+    case ChoirPart.piano:
+      return 'PIANO';
   }
 }
 

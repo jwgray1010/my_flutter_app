@@ -110,17 +110,26 @@ class RehearsalController extends ChangeNotifier {
       await initialize();
     }
     final token = _newToken();
+    final stationsById = _createDefaultStations();
+    final stationRuntimeById = <String, StationRuntimeStatus>{};
+    for (final entry in stationsById.entries) {
+      final station = entry.value;
+      stationRuntimeById[entry.key] = StationRuntimeStatus(
+        stationId: station.stationId,
+        stationName: station.stationName,
+        lockedPart: station.lockedPart,
+        currentMeasure: station.practiceSession.minMeasure,
+        tempoPercent: station.practiceSession.defaultTempoPercent,
+      );
+    }
     final session = ClassSessionState(
       sessionId: _newId('session'),
       className: (className ?? '').trim(),
       pieceId: _loadedPieceId,
       createdAt: DateTime.now(),
       pairingToken: token,
-      practiceSessions: <PracticeSessionPreset>[],
-      rosterByDeviceId: <String, StudentPracticeRecord>{},
-      loopRangeCounts: <String, int>{},
-      measureVisitCounts: <int, int>{},
-      eventLogs: <Map<String, dynamic>>[],
+      stationsById: stationsById,
+      stationRuntimeById: stationRuntimeById,
     );
     _classSession = session;
     _clientIdToDeviceId.clear();
@@ -173,17 +182,112 @@ class RehearsalController extends ChangeNotifier {
       return '';
     }
     final lines = <String>[
-      'student_name,part,minutes_practiced,sessions_completed,last_activity',
+      'student_name,station_name,locked_part,attempt_id,completed,time_seconds,time_minutes,measure_min,measure_max,tempo_min,tempo_max,loop_reps,started_at,ended_at',
     ];
-    for (final row in active.rosterByDeviceId.values) {
-      final safeName = row.studentName.replaceAll(',', ' ');
-      final safePart = row.partId.replaceAll(',', ' ');
-      final minutes = (row.totalPracticeSeconds / 60).toStringAsFixed(1);
+    if (active.stationAttempts.isEmpty) {
+      for (final runtime in active.stationRuntimeById.values) {
+        final minutes = (runtime.totalPracticeSeconds / 60).toStringAsFixed(1);
+        lines.add(
+          '${runtime.activeStudentName ?? ''},${runtime.stationName},${_stationPartCode(runtime.lockedPart)},,false,${runtime.totalPracticeSeconds},$minutes,,,,,,${runtime.lastActivityAt.toIso8601String()},',
+        );
+      }
+      return lines.join('\n');
+    }
+    for (final attempt in active.stationAttempts) {
+      final safeName = attempt.studentName.replaceAll(',', ' ');
+      final safeStation = attempt.stationName.replaceAll(',', ' ');
+      final minutes = (attempt.timeOnTaskSeconds / 60).toStringAsFixed(1);
       lines.add(
-        '$safeName,$safePart,$minutes,${row.sessionsCompleted},${row.lastActivityAt.toIso8601String()}',
+        '$safeName,$safeStation,${_stationPartCode(attempt.lockedPart)},${attempt.attemptId},${attempt.completed},${attempt.timeOnTaskSeconds},$minutes,${attempt.measuresVisitedMin ?? ''},${attempt.measuresVisitedMax ?? ''},${attempt.tempoMinUsed ?? ''},${attempt.tempoMaxUsed ?? ''},${attempt.loopReps},${attempt.startedAt.toIso8601String()},${attempt.endedAt?.toIso8601String() ?? ''}',
       );
     }
     return lines.join('\n');
+  }
+
+  List<StationConfig> get stationConfigs {
+    final active = _classSession;
+    if (active == null) {
+      return const <StationConfig>[];
+    }
+    return active.sortedStations();
+  }
+
+  StationRuntimeStatus? stationRuntime(String stationId) {
+    return _classSession?.stationRuntimeById[stationId];
+  }
+
+  Future<void> updateStationConfig({
+    required String stationId,
+    required String stationName,
+    required int startMeasure,
+    required int endMeasure,
+    required int defaultTempoPercent,
+    required bool loopDefaultOn,
+  }) async {
+    final active = _classSession;
+    if (active == null) {
+      return;
+    }
+    final station = active.stationsById[stationId];
+    if (station == null) {
+      return;
+    }
+    station.stationName = stationName.trim().isEmpty ? station.stationName : stationName.trim();
+    station.practiceSession = StationPracticeSessionConfig(
+      id: station.practiceSession.id,
+      title: '${station.stationName}: mm.$startMeasure-$endMeasure',
+      startMeasure: startMeasure,
+      endMeasure: endMeasure,
+      defaultTempoPercent:
+          (defaultTempoPercent.clamp(50, 100) as num).toInt(),
+      allowTempoAdjust: true,
+      tempoMinPercent: 50,
+      tempoMaxPercent: 100,
+      loopDefaultOn: loopDefaultOn,
+      allowCustomLoopPoints: true,
+      navBackForwardAllowed: true,
+      navStepMeasures: 2,
+      allowJumpToAnyMeasureInRange: true,
+      lockRangeStrict: true,
+    );
+    final runtime = active.stationRuntimeById[stationId];
+    if (runtime != null) {
+      runtime.stationName = station.stationName;
+      runtime.currentMeasure = station.practiceSession.minMeasure;
+      runtime.tempoPercent = station.practiceSession.defaultTempoPercent;
+      runtime.loopEnabled = station.practiceSession.loopDefaultOn;
+      runtime.loopA = station.practiceSession.loopDefaultOn
+          ? station.practiceSession.minMeasure
+          : null;
+      runtime.loopB = station.practiceSession.loopDefaultOn
+          ? station.practiceSession.maxMeasure
+          : null;
+    }
+    await _persistCurrentClassSession();
+    _broadcastStateAndNotify();
+  }
+
+  Future<Map<String, dynamic>> stationPairingPayload(String stationId) async {
+    final active = _classSession;
+    if (active == null) {
+      throw StateError('No active class session');
+    }
+    final station = active.stationsById[stationId];
+    if (station == null) {
+      throw StateError('Unknown station');
+    }
+    return _server.buildPairingPayload(
+      overrideToken: active.pairingToken,
+      extra: <String, dynamic>{
+        'mode': 'station_single',
+        'sessionId': active.sessionId,
+        'stationId': station.stationId,
+        'stationName': station.stationName,
+        'lockedPart': _stationPartCode(station.lockedPart),
+        if (station.stationPasscode != null) 'stationPasscode': station.stationPasscode,
+        'practice': station.practiceSession.toMap(),
+      },
+    );
   }
 
   Future<void> loadMusicXmlFromPicker() async {
@@ -333,6 +437,7 @@ class RehearsalController extends ChangeNotifier {
 
   Future<CommandExecutionResult> applyCommand(Map<String, dynamic> command) async {
     final type = (command['type'] as String?) ?? '';
+    final station = _stationForClientCommand(command);
     switch (type) {
       case 'PLAY':
         await _playbackController.play();
@@ -348,8 +453,15 @@ class RehearsalController extends ChangeNotifier {
         await _playbackController.play();
         return const CommandExecutionResult(applied: true, message: 'Play');
       case 'JUMP_TO_MEASURE':
-        final measure = _readInt(command['measure']);
+        var measure = _readInt(command['measure']);
         if (measure != null) {
+          if (station != null && station.practiceSession.lockRangeStrict) {
+            final clamped = measure.clamp(
+              station.practiceSession.minMeasure,
+              station.practiceSession.maxMeasure,
+            );
+            measure = (clamped as num).toInt();
+          }
           final jumpResult = await _playbackController.jumpToMeasure(
             measure,
             autoPlay: command['autoPlay'] == true,
@@ -373,11 +485,25 @@ class RehearsalController extends ChangeNotifier {
       case 'JUMP_RELATIVE':
         final delta = _readInt(command['deltaMeasures']);
         if (delta != null) {
-          _playbackController.jumpRelative(delta);
-          return CommandExecutionResult(
-            applied: true,
-            message: delta < 0 ? 'Back ${delta.abs()}' : 'Forward $delta',
-          );
+          if (station != null && station.practiceSession.lockRangeStrict) {
+            final requested = _playback.currentMeasure + delta;
+            final target = requested.clamp(
+              station.practiceSession.minMeasure,
+              station.practiceSession.maxMeasure,
+            );
+            final resolved = (target as num).toInt();
+            await _playbackController.jumpToMeasure(resolved);
+            return CommandExecutionResult(
+              applied: true,
+              message: delta < 0 ? 'Back ${delta.abs()}' : 'Forward $delta',
+            );
+          } else {
+            _playbackController.jumpRelative(delta);
+            return CommandExecutionResult(
+              applied: true,
+              message: delta < 0 ? 'Back ${delta.abs()}' : 'Forward $delta',
+            );
+          }
         }
         return const CommandExecutionResult(
           applied: false,
@@ -385,8 +511,18 @@ class RehearsalController extends ChangeNotifier {
           suggestion: "Try: 'back two measures'.",
         );
       case 'SET_TEMPO':
-        final percent = _readDouble(command['percent']);
+        var percent = _readDouble(command['percent']);
         if (percent != null) {
+          if (station != null) {
+            if (!station.practiceSession.allowTempoAdjust) {
+              percent = station.practiceSession.defaultTempoPercent.toDouble();
+            } else {
+              percent = percent.clamp(
+                station.practiceSession.tempoMinPercent.toDouble(),
+                station.practiceSession.tempoMaxPercent.toDouble(),
+              );
+            }
+          }
           _playbackController.setTempoPercent(percent.round());
           return CommandExecutionResult(
             applied: true,
@@ -401,7 +537,20 @@ class RehearsalController extends ChangeNotifier {
       case 'SET_TEMPO_ADJUST':
         final delta = _readInt(command['delta']);
         if (delta != null) {
-          _playbackController.adjustTempoPercent(delta);
+          if (station != null && !station.practiceSession.allowTempoAdjust) {
+            _playbackController.setTempoPercent(
+              station.practiceSession.defaultTempoPercent,
+            );
+          } else if (station != null) {
+            final next =
+                (_playback.tempoPercent + delta).round().clamp(
+                      station.practiceSession.tempoMinPercent,
+                      station.practiceSession.tempoMaxPercent,
+                    );
+            _playbackController.setTempoPercent((next as num).toInt());
+          } else {
+            _playbackController.adjustTempoPercent(delta);
+          }
           return CommandExecutionResult(
             applied: true,
             message: delta < 0 ? 'Tempo slower' : 'Tempo faster',
@@ -417,17 +566,38 @@ class RehearsalController extends ChangeNotifier {
         final enabled = command['enabled'];
         final part = partName == null ? null : choirPartFromId(partName);
         if (part != null && enabled is bool) {
-          final current = _playback.enabledParts.toSet();
-          if (enabled) {
-            current.add(part);
+          if (station != null) {
+            if (part == ChoirPart.piano) {
+              _playbackController.setPartsEnabled(
+                <ChoirPart>{station.lockedPart},
+                pianoOn: enabled,
+              );
+              return CommandExecutionResult(
+                applied: true,
+                message: 'Piano ${enabled ? 'on' : 'off'}',
+              );
+            }
+            _playbackController.setPartsEnabled(
+              <ChoirPart>{station.lockedPart},
+              pianoOn: _playback.enabledParts.contains(ChoirPart.piano),
+            );
+            return CommandExecutionResult(
+              applied: true,
+              message: '${station.lockedPart.shortLabel} locked',
+            );
           } else {
-            current.remove(part);
+            final current = _playback.enabledParts.toSet();
+            if (enabled) {
+              current.add(part);
+            } else {
+              current.remove(part);
+            }
+            _playbackController.setPartsEnabled(current);
+            return CommandExecutionResult(
+              applied: true,
+              message: '${part.shortLabel} ${enabled ? 'on' : 'off'}',
+            );
           }
-          _playbackController.setPartsEnabled(current);
-          return CommandExecutionResult(
-            applied: true,
-            message: '${part.shortLabel} ${enabled ? 'on' : 'off'}',
-          );
         }
         return const CommandExecutionResult(
           applied: false,
@@ -468,16 +638,40 @@ class RehearsalController extends ChangeNotifier {
         if (pianoEnabled == null && _playback.enabledParts.contains(ChoirPart.piano)) {
           enabled.add(ChoirPart.piano);
         }
-        _playbackController.setPartsEnabled(enabled, pianoOn: pianoEnabled);
+        if (station != null) {
+          _playbackController.setPartsEnabled(
+            <ChoirPart>{station.lockedPart},
+            pianoOn: pianoEnabled ?? _playback.enabledParts.contains(ChoirPart.piano),
+          );
+        } else {
+          _playbackController.setPartsEnabled(enabled, pianoOn: pianoEnabled);
+        }
         return const CommandExecutionResult(
           applied: true,
           message: 'Parts updated',
         );
       case 'SET_MIX_PRESET':
         final presetRaw = ((command['preset'] as String?) ?? '').toLowerCase();
+        if (station != null) {
+          _playbackController.setPartsEnabled(
+            <ChoirPart>{station.lockedPart},
+            pianoOn: command['pianoOn'] as bool? ?? true,
+          );
+          return const CommandExecutionResult(
+            applied: true,
+            message: 'Station mix locked',
+          );
+        }
         switch (presetRaw) {
           case 'all':
-            _playbackController.setPreset(MixPreset.all);
+            if (station != null) {
+              _playbackController.setPartsEnabled(
+                <ChoirPart>{station.lockedPart},
+                pianoOn: true,
+              );
+            } else {
+              _playbackController.setPreset(MixPreset.all);
+            }
             return const CommandExecutionResult(
               applied: true,
               message: 'All parts on',
@@ -527,11 +721,23 @@ class RehearsalController extends ChangeNotifier {
             );
         }
       case 'SET_ALL_PARTS':
-        _playbackController.setPreset(MixPreset.all);
+        if (station != null) {
+          _playbackController.setPartsEnabled(
+            <ChoirPart>{station.lockedPart},
+            pianoOn: true,
+          );
+        } else {
+          _playbackController.setPreset(MixPreset.all);
+        }
         return const CommandExecutionResult(applied: true, message: 'All parts on');
       case 'SET_LOOP_A':
-        final measure = _readInt(command['measure']);
+        var measure = _readInt(command['measure']);
         if (measure != null) {
+          if (station != null && station.practiceSession.lockRangeStrict) {
+            measure = measure
+                .clamp(station.practiceSession.minMeasure, station.practiceSession.maxMeasure)
+                .toInt();
+          }
           _playbackController.setLoopA(measure: measure);
           return CommandExecutionResult(
             applied: true,
@@ -540,8 +746,13 @@ class RehearsalController extends ChangeNotifier {
         }
         return const CommandExecutionResult(applied: false, message: "Didn't catch that.");
       case 'SET_LOOP_B':
-        final measure = _readInt(command['measure']);
+        var measure = _readInt(command['measure']);
         if (measure != null) {
+          if (station != null && station.practiceSession.lockRangeStrict) {
+            measure = measure
+                .clamp(station.practiceSession.minMeasure, station.practiceSession.maxMeasure)
+                .toInt();
+          }
           _playbackController.setLoopB(measure: measure);
           return CommandExecutionResult(
             applied: true,
@@ -550,9 +761,17 @@ class RehearsalController extends ChangeNotifier {
         }
         return const CommandExecutionResult(applied: false, message: "Didn't catch that.");
       case 'SET_LOOP_RANGE':
-        final a = _readInt(command['a']);
-        final b = _readInt(command['b']);
+        var a = _readInt(command['a']);
+        var b = _readInt(command['b']);
         if (a != null && b != null) {
+          if (station != null && station.practiceSession.lockRangeStrict) {
+            a = a
+                .clamp(station.practiceSession.minMeasure, station.practiceSession.maxMeasure)
+                .toInt();
+            b = b
+                .clamp(station.practiceSession.minMeasure, station.practiceSession.maxMeasure)
+                .toInt();
+          }
           _playbackController.setLoopRange(a: a, b: b);
           return CommandExecutionResult(
             applied: true,
@@ -581,6 +800,10 @@ class RehearsalController extends ChangeNotifier {
           applied: true,
           message: 'Play starting pitches',
         );
+      case 'REGISTER_STATION':
+        return _handleRegisterStation(command);
+      case 'JOIN_STATION':
+        return _handleJoinStation(command);
       case 'JOIN_CLASS_SESSION':
         return _handleJoinClassSession(command);
       case 'START_PRACTICE_SESSION':
@@ -589,6 +812,8 @@ class RehearsalController extends ChangeNotifier {
         return _handlePracticeEvent(command);
       case 'PRACTICE_SUMMARY':
         return _handlePracticeSummary(command);
+      case 'PRACTICE_COMPLETED':
+        return _handlePracticeCompleted(command);
       default:
         return const CommandExecutionResult(
           applied: false,
@@ -688,6 +913,153 @@ class RehearsalController extends ChangeNotifier {
       default:
         return choirPartFromId(raw);
     }
+  }
+
+  StationConfig? _stationForClientCommand(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return null;
+    }
+    final clientId = command['_clientId']?.toString();
+    if (clientId == null || clientId.isEmpty) {
+      return null;
+    }
+    final deviceId = _clientIdToDeviceId[clientId];
+    if (deviceId == null || deviceId.isEmpty) {
+      return null;
+    }
+    for (final station in active.stationsById.values) {
+      if (station.deviceId == deviceId) {
+        return station;
+      }
+    }
+    return null;
+  }
+
+  CommandExecutionResult _handleRegisterStation(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(applied: false, message: 'No active class session');
+    }
+    final sessionId = command['sessionId']?.toString() ?? '';
+    if (sessionId != active.sessionId) {
+      return const CommandExecutionResult(applied: false, message: 'Session mismatch');
+    }
+    final stationId = command['stationId']?.toString() ?? '';
+    final deviceId = command['deviceId']?.toString() ?? '';
+    final station = active.stationsById[stationId];
+    if (station == null) {
+      return const CommandExecutionResult(applied: false, message: 'Unknown station');
+    }
+    if (deviceId.isNotEmpty) {
+      station.deviceId = deviceId;
+    }
+    final runtime = active.stationRuntimeById[stationId];
+    if (runtime != null) {
+      runtime.connected = true;
+      runtime.lastActivityAt = DateTime.now();
+    }
+    final clientId = command['_clientId']?.toString();
+    if (clientId != null && clientId.isNotEmpty && deviceId.isNotEmpty) {
+      _clientIdToDeviceId[clientId] = deviceId;
+    }
+    _logClassEvent(<String, dynamic>{
+      'type': 'REGISTER_STATION',
+      'stationId': stationId,
+      'deviceId': deviceId,
+      'at': DateTime.now().toIso8601String(),
+    });
+    unawaited(_persistCurrentClassSession());
+    _broadcastStateAndNotify();
+    return const CommandExecutionResult(applied: true, message: 'Station registered');
+  }
+
+  CommandExecutionResult _handleJoinStation(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(applied: false, message: 'No active class session');
+    }
+    final sessionId = command['sessionId']?.toString() ?? '';
+    if (sessionId != active.sessionId) {
+      return const CommandExecutionResult(applied: false, message: 'Session mismatch');
+    }
+    final stationId = command['stationId']?.toString() ?? '';
+    final studentName = command['studentName']?.toString().trim() ?? '';
+    final deviceId = command['deviceId']?.toString() ?? '';
+    final attemptId = command['attemptId']?.toString() ?? _newId('attempt');
+    final station = active.stationsById[stationId];
+    if (station == null || studentName.isEmpty) {
+      return const CommandExecutionResult(applied: false, message: 'Invalid station join');
+    }
+
+    if (deviceId.isNotEmpty) {
+      station.deviceId = deviceId;
+    }
+    final clientId = command['_clientId']?.toString();
+    if (clientId != null && clientId.isNotEmpty && deviceId.isNotEmpty) {
+      _clientIdToDeviceId[clientId] = deviceId;
+    }
+    final runtime = active.stationRuntimeById.putIfAbsent(
+      stationId,
+      () => StationRuntimeStatus(
+        stationId: stationId,
+        stationName: station.stationName,
+        lockedPart: station.lockedPart,
+      ),
+    );
+    runtime.stationName = station.stationName;
+    runtime.activeStudentName = studentName;
+    runtime.activeAttemptId = attemptId;
+    runtime.currentMeasure = station.practiceSession.minMeasure;
+    runtime.tempoPercent = station.practiceSession.defaultTempoPercent;
+    runtime.loopEnabled = station.practiceSession.loopDefaultOn;
+    runtime.loopA = station.practiceSession.loopDefaultOn ? station.practiceSession.minMeasure : null;
+    runtime.loopB = station.practiceSession.loopDefaultOn ? station.practiceSession.maxMeasure : null;
+    runtime.connected = true;
+    runtime.lastActivityAt = DateTime.now();
+
+    final existingAttempt = _findStationAttempt(active, attemptId);
+    if (existingAttempt == null) {
+      active.stationAttempts.add(
+        StationAttemptSummary(
+          attemptId: attemptId,
+          sessionId: active.sessionId,
+          stationId: stationId,
+          stationName: station.stationName,
+          studentName: studentName,
+          lockedPart: station.lockedPart,
+          startedAt: DateTime.now(),
+          measuresVisitedMin: station.practiceSession.minMeasure,
+          measuresVisitedMax: station.practiceSession.minMeasure,
+          tempoMinUsed: station.practiceSession.defaultTempoPercent,
+          tempoMaxUsed: station.practiceSession.defaultTempoPercent,
+        ),
+      );
+    }
+
+    _playbackController.setPartsEnabled(<ChoirPart>{station.lockedPart}, pianoOn: true);
+    _playbackController.setTempoPercent(station.practiceSession.defaultTempoPercent);
+    if (station.practiceSession.loopDefaultOn) {
+      _playbackController.setLoopRange(
+        a: station.practiceSession.minMeasure,
+        b: station.practiceSession.maxMeasure,
+      );
+    } else {
+      _playbackController.clearLoop();
+    }
+    unawaited(_playbackController.jumpToMeasure(station.practiceSession.minMeasure));
+
+    _logClassEvent(<String, dynamic>{
+      'type': 'JOIN_STATION',
+      'stationId': stationId,
+      'studentName': studentName,
+      'attemptId': attemptId,
+      'deviceId': deviceId,
+      'at': DateTime.now().toIso8601String(),
+    });
+    unawaited(_persistCurrentClassSession());
+    _broadcastStateAndNotify();
+    return const CommandExecutionResult(applied: true, message: 'Station joined');
   }
 
   CommandExecutionResult _handleJoinClassSession(Map<String, dynamic> command) {
@@ -798,61 +1170,94 @@ class RehearsalController extends ChangeNotifier {
     if (active == null) {
       return const CommandExecutionResult(applied: false, message: 'No active class session');
     }
-    final deviceId = command['deviceId']?.toString() ?? '';
+    final attemptId = command['attemptId']?.toString() ?? '';
     final eventType = command['event']?.toString().toUpperCase() ?? '';
-    if (deviceId.isEmpty || eventType.isEmpty) {
+    if (attemptId.isEmpty || eventType.isEmpty) {
       return const CommandExecutionResult(applied: false, message: 'Malformed practice event');
     }
-    final student = active.rosterByDeviceId[deviceId];
-    if (student == null) {
-      return const CommandExecutionResult(applied: false, message: 'Unknown student');
+    final attempt = _findStationAttempt(active, attemptId);
+    if (attempt == null) {
+      return const CommandExecutionResult(applied: false, message: 'Unknown attempt');
     }
-
+    final runtime = active.stationRuntimeById[attempt.stationId];
     final now = DateTime.now();
-    student.lastActivityAt = now;
-    if (eventType == 'PLAY') {
-      student.status = 'practicing';
-    } else if (eventType == 'PAUSE') {
-      student.status = 'idle';
-    }
 
     final currentMeasure = _readInt(command['currentMeasure']);
     if (currentMeasure != null) {
-      student.currentMeasure = currentMeasure;
+      attempt.measuresVisitedMin = attempt.measuresVisitedMin == null
+          ? currentMeasure
+          : (attempt.measuresVisitedMin! < currentMeasure
+                ? attempt.measuresVisitedMin
+                : currentMeasure);
+      attempt.measuresVisitedMax = attempt.measuresVisitedMax == null
+          ? currentMeasure
+          : (attempt.measuresVisitedMax! > currentMeasure
+                ? attempt.measuresVisitedMax
+                : currentMeasure);
       active.measureVisitCounts[currentMeasure] =
           (active.measureVisitCounts[currentMeasure] ?? 0) + 1;
+      if (runtime != null) {
+        runtime.currentMeasure = currentMeasure;
+      }
     }
-    final currentTempo = _readInt(command['tempoPercent']);
-    if (currentTempo != null) {
-      student.currentTempo = currentTempo;
+    final tempo = _readInt(command['tempoPercent']);
+    if (tempo != null) {
+      attempt.tempoMinUsed =
+          attempt.tempoMinUsed == null ? tempo : (attempt.tempoMinUsed! < tempo ? attempt.tempoMinUsed : tempo);
+      attempt.tempoMaxUsed =
+          attempt.tempoMaxUsed == null ? tempo : (attempt.tempoMaxUsed! > tempo ? attempt.tempoMaxUsed : tempo);
+      if (runtime != null) {
+        runtime.tempoPercent = tempo;
+      }
     }
     final deltaSeconds = _readInt(command['deltaSeconds']);
     if (deltaSeconds != null && deltaSeconds > 0) {
-      student.totalPracticeSeconds += deltaSeconds;
+      attempt.timeOnTaskSeconds += deltaSeconds;
+      if (runtime != null) {
+        runtime.totalPracticeSeconds += deltaSeconds;
+      }
     }
-    final loopRange = command['loopRange']?.toString();
-    if (loopRange != null && loopRange.isNotEmpty) {
-      active.loopRangeCounts[loopRange] = (active.loopRangeCounts[loopRange] ?? 0) + 1;
+    final loopStateRaw = command['loopState'];
+    if (loopStateRaw is Map) {
+      final loopState = loopStateRaw.cast<String, dynamic>();
+      final enabled = loopState['enabled'] == true;
+      final a = _readInt(loopState['a']);
+      final b = _readInt(loopState['b']);
+      if (runtime != null) {
+        runtime.loopEnabled = enabled;
+        runtime.loopA = a;
+        runtime.loopB = b;
+      }
+      if (enabled && a != null && b != null) {
+        final start = a <= b ? a : b;
+        final end = a <= b ? b : a;
+        final key = 'mm.$start-$end';
+        if (eventType == 'LOOP') {
+          active.loopRangeCounts[key] = (active.loopRangeCounts[key] ?? 0) + 1;
+          attempt.loopReps += 1;
+        }
+      }
     }
-    final completed = command['completed'] == true;
-    final completedSessionId = command['practiceSessionId']?.toString();
-    if (completed && completedSessionId != null && completedSessionId.isNotEmpty) {
-      if (student.completedSessionIds.add(completedSessionId)) {
-        student.sessionsCompleted += 1;
+    if (runtime != null) {
+      runtime.lastActivityAt = now;
+      runtime.connected = true;
+      if (eventType == 'PAUSE') {
+        // Keep active student, just not playing.
       }
     }
 
     _logClassEvent(<String, dynamic>{
       'type': 'PRACTICE_EVENT',
-      'deviceId': deviceId,
+      'attemptId': attemptId,
+      'stationId': attempt.stationId,
+      'studentName': attempt.studentName,
       'event': eventType,
-      'currentMeasure': student.currentMeasure,
-      'tempoPercent': student.currentTempo,
-      'completed': completed,
-      'practiceSessionId': completedSessionId,
+      'currentMeasure': currentMeasure,
+      'tempoPercent': tempo,
       'at': now.toIso8601String(),
     });
     unawaited(_persistCurrentClassSession());
+    _broadcastStateAndNotify();
     return const CommandExecutionResult(applied: true, message: 'Practice event recorded');
   }
 
@@ -861,41 +1266,111 @@ class RehearsalController extends ChangeNotifier {
     if (active == null) {
       return const CommandExecutionResult(applied: false, message: 'No active class session');
     }
-    final deviceId = command['deviceId']?.toString() ?? '';
-    final student = active.rosterByDeviceId[deviceId];
-    if (deviceId.isEmpty || student == null) {
-      return const CommandExecutionResult(applied: false, message: 'Unknown student');
+    final attemptId = command['attemptId']?.toString() ?? '';
+    if (attemptId.isEmpty) {
+      return const CommandExecutionResult(applied: false, message: 'Missing attempt');
     }
+    final attempt = _findStationAttempt(active, attemptId);
+    if (attempt == null) {
+      return const CommandExecutionResult(applied: false, message: 'Unknown attempt');
+    }
+    final stationId = command['stationId']?.toString() ?? attempt.stationId;
+    final runtime = active.stationRuntimeById[stationId];
+
     final seconds = _readInt(command['timeOnTaskSeconds']);
-    if (seconds != null && seconds > student.totalPracticeSeconds) {
-      student.totalPracticeSeconds = seconds;
+    if (seconds != null) {
+      attempt.timeOnTaskSeconds = seconds > attempt.timeOnTaskSeconds ? seconds : attempt.timeOnTaskSeconds;
     }
-    final completedRaw = command['completedSessions'];
-    if (completedRaw is List) {
-      for (final id in completedRaw) {
-        student.completedSessionIds.add(id.toString());
+    final minMeasure = _readInt(command['measuresVisitedMin']);
+    final maxMeasure = _readInt(command['measuresVisitedMax']);
+    if (minMeasure != null) {
+      attempt.measuresVisitedMin = minMeasure;
+      active.measureVisitCounts[minMeasure] = (active.measureVisitCounts[minMeasure] ?? 0) + 1;
+    }
+    if (maxMeasure != null) {
+      attempt.measuresVisitedMax = maxMeasure;
+      active.measureVisitCounts[maxMeasure] = (active.measureVisitCounts[maxMeasure] ?? 0) + 1;
+    }
+    final loopReps = _readInt(command['loopReps']);
+    if (loopReps != null && loopReps > attempt.loopReps) {
+      attempt.loopReps = loopReps;
+    }
+    final tempoMin = _readInt(command['tempoMinUsed']);
+    final tempoMax = _readInt(command['tempoMaxUsed']);
+    if (tempoMin != null) {
+      attempt.tempoMinUsed = tempoMin;
+    }
+    if (tempoMax != null) {
+      attempt.tempoMaxUsed = tempoMax;
+    }
+    final wasCompleted = attempt.completed;
+    if (command['completed'] == true) {
+      attempt.completed = true;
+      attempt.endedAt ??= DateTime.now();
+    }
+    if (runtime != null) {
+      runtime.lastActivityAt = DateTime.now();
+      runtime.totalPracticeSeconds = runtime.totalPracticeSeconds < attempt.timeOnTaskSeconds
+          ? attempt.timeOnTaskSeconds
+          : runtime.totalPracticeSeconds;
+      if (attempt.completed && !wasCompleted) {
+        runtime.studentsCompleted += 1;
       }
-      student.sessionsCompleted = student.completedSessionIds.length;
-    }
-    final measuresRaw = command['measuresVisited'];
-    if (measuresRaw is List) {
-      for (final measure in measuresRaw) {
-        final parsed = _readInt(measure);
-        if (parsed != null) {
-          active.measureVisitCounts[parsed] = (active.measureVisitCounts[parsed] ?? 0) + 1;
-        }
+      if (attempt.completed && runtime.activeAttemptId == attemptId) {
+        runtime.activeAttemptId = null;
+        runtime.activeStudentName = null;
       }
     }
-    student.lastActivityAt = DateTime.now();
     _logClassEvent(<String, dynamic>{
       'type': 'PRACTICE_SUMMARY',
-      'deviceId': deviceId,
-      'timeOnTaskSeconds': student.totalPracticeSeconds,
-      'sessionsCompleted': student.sessionsCompleted,
+      'attemptId': attemptId,
+      'stationId': stationId,
+      'timeOnTaskSeconds': attempt.timeOnTaskSeconds,
+      'completed': attempt.completed,
       'at': DateTime.now().toIso8601String(),
     });
     unawaited(_persistCurrentClassSession());
+    _broadcastStateAndNotify();
     return const CommandExecutionResult(applied: true, message: 'Summary recorded');
+  }
+
+  CommandExecutionResult _handlePracticeCompleted(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(applied: false, message: 'No active class session');
+    }
+    final attemptId = command['attemptId']?.toString() ?? '';
+    if (attemptId.isEmpty) {
+      return const CommandExecutionResult(applied: false, message: 'Missing attempt');
+    }
+    final attempt = _findStationAttempt(active, attemptId);
+    if (attempt == null) {
+      return const CommandExecutionResult(applied: false, message: 'Unknown attempt');
+    }
+    final wasCompleted = attempt.completed;
+    if (!attempt.completed) {
+      attempt.completed = true;
+    }
+    attempt.endedAt ??= DateTime.now();
+    final runtime = active.stationRuntimeById[attempt.stationId];
+    if (runtime != null) {
+      if (!wasCompleted) {
+        runtime.studentsCompleted += 1;
+      }
+      runtime.activeStudentName = null;
+      runtime.activeAttemptId = null;
+      runtime.lastActivityAt = DateTime.now();
+    }
+    _logClassEvent(<String, dynamic>{
+      'type': 'PRACTICE_COMPLETED',
+      'attemptId': attemptId,
+      'stationId': attempt.stationId,
+      'studentName': attempt.studentName,
+      'at': DateTime.now().toIso8601String(),
+    });
+    unawaited(_persistCurrentClassSession());
+    _broadcastStateAndNotify();
+    return const CommandExecutionResult(applied: true, message: 'Completion recorded');
   }
 
   Future<void> _persistCurrentClassSession() async {
@@ -930,14 +1405,109 @@ class RehearsalController extends ChangeNotifier {
     if (deviceId == null) {
       return;
     }
+    var updated = false;
     final student = active.rosterByDeviceId[deviceId];
-    if (student == null) {
-      return;
+    if (student != null) {
+      student.connected = connected;
+      student.status = connected ? student.status : 'idle';
+      student.lastActivityAt = DateTime.now();
+      updated = true;
     }
-    student.connected = connected;
-    student.status = connected ? student.status : 'idle';
-    student.lastActivityAt = DateTime.now();
-    _broadcastStateAndNotify();
+    for (final runtime in active.stationRuntimeById.values) {
+      final station = active.stationsById[runtime.stationId];
+      if (station?.deviceId == deviceId) {
+        runtime.connected = connected;
+        runtime.lastActivityAt = DateTime.now();
+        if (!connected) {
+          runtime.activeStudentName = null;
+          runtime.activeAttemptId = null;
+        }
+        updated = true;
+      }
+    }
+    if (updated) {
+      _broadcastStateAndNotify();
+    }
+  }
+
+  StationAttemptSummary? _findStationAttempt(ClassSessionState session, String attemptId) {
+    for (final attempt in session.stationAttempts) {
+      if (attempt.attemptId == attemptId) {
+        return attempt;
+      }
+    }
+    return null;
+  }
+
+  Map<String, StationConfig> _createDefaultStations() {
+    final measures = _playback.score?.measureNumbers ?? <int>[1];
+    final firstMeasure = measures.isEmpty ? 1 : measures.first;
+    final lastMeasure = measures.isEmpty ? 8 : measures.last;
+    final defaultEnd =
+        ((firstMeasure + 8).clamp(firstMeasure, lastMeasure) as num).toInt();
+    final map = <String, StationConfig>{};
+    for (final part in const [
+      ChoirPart.soprano,
+      ChoirPart.alto,
+      ChoirPart.tenor,
+      ChoirPart.bass,
+    ]) {
+      final stationId = _newId('station_${part.id}');
+      final stationName = '${_stationLabel(part)} Station';
+      final practice = StationPracticeSessionConfig(
+        id: _newId('practice_${part.id}'),
+        title: '${_stationLabel(part)}: mm.$firstMeasure-$defaultEnd',
+        startMeasure: firstMeasure,
+        endMeasure: defaultEnd,
+        defaultTempoPercent: 70,
+        allowTempoAdjust: true,
+        tempoMinPercent: 50,
+        tempoMaxPercent: 100,
+        loopDefaultOn: true,
+        allowCustomLoopPoints: true,
+        navBackForwardAllowed: true,
+        navStepMeasures: 2,
+        allowJumpToAnyMeasureInRange: true,
+        lockRangeStrict: true,
+      );
+      map[stationId] = StationConfig(
+        stationId: stationId,
+        stationName: stationName,
+        lockedPart: part,
+        practiceSession: practice,
+      );
+    }
+    return map;
+  }
+
+  String _stationLabel(ChoirPart part) {
+    switch (part) {
+      case ChoirPart.soprano:
+        return 'Soprano';
+      case ChoirPart.alto:
+        return 'Alto';
+      case ChoirPart.tenor:
+        return 'Tenor';
+      case ChoirPart.bass:
+        return 'Bass';
+      case ChoirPart.piano:
+        return 'Piano';
+    }
+  }
+
+  String _stationPartCode(ChoirPart part) {
+    switch (part) {
+      case ChoirPart.soprano:
+        return 'SOP';
+      case ChoirPart.alto:
+        return 'ALTO';
+      case ChoirPart.tenor:
+        return 'TENOR';
+      case ChoirPart.bass:
+        return 'BASS';
+      case ChoirPart.piano:
+        return 'PIANO';
+    }
   }
 
   String _buildPieceId(String xmlContent) {

@@ -312,12 +312,6 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                       ),
                     ),
                     ElevatedButton.icon(
-                      onPressed:
-                          _controller.hasActiveClassSession ? _showClassSessionQrSheet : null,
-                      icon: const Icon(Icons.qr_code_2),
-                      label: const Text('Class QR'),
-                    ),
-                    ElevatedButton.icon(
                       onPressed: _openTeacherView,
                       icon: const Icon(Icons.assessment),
                       label: const Text('Teacher View'),
@@ -514,17 +508,6 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
     );
   }
 
-  Future<void> _showClassSessionQrSheet() async {
-    if (!_controller.hasActiveClassSession) {
-      return;
-    }
-    final payload = await _controller.classSessionPairingPayload();
-    await _showQrPayloadSheet(
-      title: 'Class Session QR',
-      payload: payload,
-    );
-  }
-
   Future<void> _showQrPayloadSheet({
     required String title,
     required Map<String, dynamic> payload,
@@ -594,7 +577,7 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                   return;
                 }
                 Navigator.of(context).pop();
-                await _showClassSessionQrSheet();
+                _openTeacherView();
               },
               child: const Text('Start'),
             ),
@@ -1019,7 +1002,12 @@ class _ClassSessionStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final connected = session.rosterByDeviceId.values.where((row) => row.connected).length;
+    final connectedStations = session.stationRuntimeById.values
+        .where((runtime) => runtime.connected)
+        .length;
+    final activeStudents = session.stationRuntimeById.values
+        .where((runtime) => runtime.activeStudentName != null)
+        .length;
     return Card(
       color: const Color(0xFF1A2530),
       child: Padding(
@@ -1035,9 +1023,9 @@ class _ClassSessionStatusCard extends StatelessWidget {
             Text(
               'Session ${session.sessionId.length > 8 ? session.sessionId.substring(0, 8) : session.sessionId}...',
             ),
-            Text('Practice sessions: ${session.practiceSessions.length}'),
-            Text('Students: ${session.rosterByDeviceId.length}'),
-            Text('Connected: $connected'),
+            Text('Stations: ${session.stationsById.length}'),
+            Text('Active students: $activeStudents'),
+            Text('Connected stations: $connectedStations'),
           ],
         ),
       ),
