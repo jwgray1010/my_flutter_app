@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'checkin_assessment.dart';
+import 'class_session_models.dart';
 import 'networking.dart';
 
 class RokuRemoteScreen extends StatelessWidget {
@@ -437,6 +439,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
                             _StationHomePanel(
                               recentNames: _recentNames,
                               onStart: (name) => _startStudentAttempt(station, name),
+                              onCheckIn: () => _openCheckIn(station),
                             ),
                           if (_isPracticing) ...[
                             _RokuButton(
@@ -573,6 +576,63 @@ class _StationModeScreenState extends State<StationModeScreen> {
         setState(_resetPracticeState);
       }
     }
+  }
+
+  Future<void> _openCheckIn(StationModeConfig station) async {
+    if (!station.isValid) {
+      return;
+    }
+    final name = await _promptStudentName();
+    if (!mounted || name == null || name.trim().isEmpty) {
+      return;
+    }
+    _recentNames.remove(name.trim());
+    _recentNames.insert(0, name.trim());
+    if (_recentNames.length > 6) {
+      _recentNames.removeLast();
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => StationCheckInScreen(
+          client: _client,
+          station: station,
+          studentName: name.trim(),
+        ),
+      ),
+    );
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<String?> _promptStudentName() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: _RokuTokens.card,
+          title: const Text('Check-In Student'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'Student name',
+              hintText: 'First + last initial',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+              child: const Text('Continue'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<bool> _canReconfigure(StationModeConfig station) async {
@@ -1624,10 +1684,12 @@ class _StationHomePanel extends StatelessWidget {
   const _StationHomePanel({
     required this.recentNames,
     required this.onStart,
+    required this.onCheckIn,
   });
 
   final List<String> recentNames;
   final void Function(String name) onStart;
+  final VoidCallback onCheckIn;
 
   @override
   Widget build(BuildContext context) {
@@ -1645,6 +1707,12 @@ class _StationHomePanel extends StatelessWidget {
                 onStart(name.trim());
               }
             },
+          ),
+          const SizedBox(height: 12),
+          _RokuButton(
+            label: 'CHECK-IN',
+            height: 88,
+            onPressed: onCheckIn,
           ),
           if (recentNames.isNotEmpty) ...[
             const SizedBox(height: 14),
@@ -1936,6 +2004,724 @@ class _RokuPillToggle extends StatelessWidget {
   }
 }
 
+class StationCheckInScreen extends StatefulWidget {
+  const StationCheckInScreen({
+    super.key,
+    required this.client,
+    required this.station,
+    required this.studentName,
+  });
+
+  final RemoteClient client;
+  final StationModeConfig station;
+  final String studentName;
+
+  @override
+  State<StationCheckInScreen> createState() => _StationCheckInScreenState();
+}
+
+class _StationCheckInScreenState extends State<StationCheckInScreen> {
+  final CheckInAudioCapture _audioCapture = CheckInAudioCapture();
+  final Map<CheckInTier, _TierOutcome> _outcomes = <CheckInTier, _TierOutcome>{};
+
+  bool _running = false;
+  CheckInTier? _activeTier;
+  CheckInTier? _lastTierRun;
+  String _statusText = 'Ready';
+  CheckInAssessmentOutput? _lastAssessment;
+
+  Timer? _clickTimer;
+  int _challengeSeconds = 0;
+  int _challengeLoopReps = 0;
+  int? _lastMeasure;
+
+  @override
+  void dispose() {
+    _clickTimer?.cancel();
+    unawaited(_audioCapture.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final recommended = _recommendedTier();
+    final lastOutcome = _lastTierRun == null ? null : _outcomes[_lastTierRun!];
+    return Scaffold(
+      backgroundColor: _RokuTokens.bg,
+      appBar: AppBar(
+        backgroundColor: _RokuTokens.bg,
+        title: const Text('CHECK-IN LADDER'),
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                widget.studentName,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: _RokuTokens.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${widget.station.stationName} | mm.${widget.station.minMeasure}-${widget.station.maxMeasure}',
+                textAlign: TextAlign.center,
+                style: _RokuTokens.statusSecondary,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _statusText,
+                textAlign: TextAlign.center,
+                style: _RokuTokens.statusSecondary,
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: CheckInTier.values.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) {
+                    final tier = CheckInTier.values[index];
+                    final active = _activeTier == tier;
+                    final outcome = _outcomes[tier];
+                    return _CheckInTierCard(
+                      tier: tier,
+                      statusLabel: _tierStatusLabel(tier),
+                      subtitle: tier.title,
+                      highlighted: tier == recommended || active,
+                      running: active && _running,
+                      onStart: _running
+                          ? null
+                          : () {
+                              _tapHaptic();
+                              unawaited(_startTier(tier));
+                            },
+                      canRetry: outcome != null,
+                    );
+                  },
+                ),
+              ),
+              if (lastOutcome != null && _lastTierRun != null && _lastTierRun!.isScored) ...[
+                const SizedBox(height: 8),
+                _AssessmentResultCard(
+                  result: lastOutcome.result,
+                  confidenceScore: lastOutcome.confidenceScore,
+                  troubleMeasures: lastOutcome.troubleMeasures,
+                  feedbackMessages: lastOutcome.feedbackMessages,
+                  onPracticeFlagged: lastOutcome.troubleMeasures.isEmpty
+                      ? null
+                      : () => _practiceFlaggedSpot(lastOutcome.troubleMeasures.first),
+                  onTryAgain: _running
+                      ? null
+                      : () {
+                          _tapHaptic();
+                          unawaited(_startTier(_lastTierRun!));
+                        },
+                ),
+              ],
+              const SizedBox(height: 10),
+              _RokuButton(
+                label: 'DONE / NEXT STUDENT',
+                height: 76,
+                outlined: true,
+                onPressed: _running
+                    ? null
+                    : () {
+                        _tapHaptic();
+                        Navigator.of(context).pop();
+                      },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _startTier(CheckInTier tier) async {
+    if (_running) {
+      return;
+    }
+    setState(() {
+      _running = true;
+      _activeTier = tier;
+      _lastTierRun = tier;
+      _statusText = 'Starting ${tier.shortLabel}...';
+      _lastAssessment = null;
+    });
+
+    if (tier.isScored) {
+      await _runScoredTier(tier);
+    } else {
+      await _runChallengeTier(tier);
+    }
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _running = false;
+      _activeTier = null;
+    });
+  }
+
+  Future<void> _runScoredTier(CheckInTier tier) async {
+    final noise = await _audioCapture.measureAmbientNoise();
+    if (!noise.available) {
+      await _recordLowConfidence(
+        tier,
+        'Mic permission required for assessment.',
+      );
+      return;
+    }
+    if (noise.tooLoud) {
+      await _recordLowConfidence(
+        tier,
+        'Too loud to assess - move closer.',
+      );
+      return;
+    }
+
+    await _configureTierPlayback(tier);
+    await _startingPitchAndCountIn(
+      withClick: tier == CheckInTier.acapellaClick,
+    );
+
+    final started = await _audioCapture.start();
+    if (!started) {
+      await _recordLowConfidence(
+        tier,
+        'Mic unavailable during recording.',
+      );
+      return;
+    }
+
+    if (tier == CheckInTier.acapellaClick) {
+      _startClickTrack();
+    }
+    widget.client.sendCommandEnvelope('PLAY');
+    final targetSeconds = _estimateScoredDurationSeconds();
+    for (var second = 0; second < targetSeconds; second++) {
+      if (!_running) {
+        break;
+      }
+      setState(() {
+        _statusText = '${tier.shortLabel} recording ${second + 1}s/$targetSeconds';
+      });
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
+    widget.client.sendCommandEnvelope('PAUSE');
+    _stopClickTrack();
+
+    final recorded = await _audioCapture.stop();
+    final expected = _expectedProfilesForStation();
+    final assessment = CheckInAssessmentEngine.assess(
+      audio: recorded,
+      expectedByMeasure: expected,
+      minMeasure: widget.station.minMeasure,
+      maxMeasure: widget.station.maxMeasure,
+    );
+    _lastAssessment = assessment;
+    _outcomes[tier] = _TierOutcome(
+      result: assessment.result,
+      confidenceScore: assessment.overallConfidence,
+      troubleMeasures: assessment.troubleMeasures,
+      feedbackMessages: assessment.feedbackMessages,
+      timeOnTaskSeconds: recorded.durationSeconds.round(),
+    );
+    setState(() {
+      _statusText = '${tier.shortLabel} ${assessment.result.label}';
+    });
+    await _sendCheckInAttempt(
+      tier: tier,
+      result: assessment.result,
+      confidenceScore: assessment.overallConfidence,
+      troubleMeasures: assessment.troubleMeasures,
+      timeOnTaskSeconds: recorded.durationSeconds.round(),
+    );
+  }
+
+  Future<void> _runChallengeTier(CheckInTier tier) async {
+    await _configureTierPlayback(tier);
+    await _startingPitchAndCountIn(withClick: false);
+    _challengeSeconds = 0;
+    _challengeLoopReps = 0;
+    _lastMeasure = RokuRemoteState.fromMap(widget.client.latestState).currentMeasure;
+    widget.client.sendCommandEnvelope('PLAY');
+    while (_running) {
+      await Future<void>.delayed(const Duration(seconds: 1));
+      if (!_running) {
+        break;
+      }
+      final state = RokuRemoteState.fromMap(widget.client.latestState);
+      if (state.isPlaying) {
+        _challengeSeconds += 1;
+      }
+      if (_lastMeasure != null &&
+          state.loopEnabled &&
+          state.currentMeasure < _lastMeasure!) {
+        _challengeLoopReps += 1;
+      }
+      _lastMeasure = state.currentMeasure;
+      setState(() {
+        _statusText =
+            '${tier.shortLabel} challenge ${_challengeSeconds}s, loops ${_challengeLoopReps}';
+      });
+      if (_challengeSeconds >= 90 || _challengeLoopReps >= 2) {
+        break;
+      }
+    }
+    widget.client.sendCommandEnvelope('PAUSE');
+    final completed = _challengeSeconds >= 90 || _challengeLoopReps >= 2;
+    final result = completed
+        ? CheckInResult.challengeCompleted
+        : CheckInResult.needsWork;
+    _outcomes[tier] = _TierOutcome(
+      result: result,
+      confidenceScore: 100,
+      troubleMeasures: const <int>[],
+      feedbackMessages: const <String>[],
+      timeOnTaskSeconds: _challengeSeconds,
+    );
+    setState(() {
+      _statusText = completed
+          ? '${tier.shortLabel} Challenge completed'
+          : '${tier.shortLabel} Challenge stopped';
+    });
+    await _sendCheckInAttempt(
+      tier: tier,
+      result: result,
+      confidenceScore: 100,
+      troubleMeasures: const <int>[],
+      timeOnTaskSeconds: _challengeSeconds,
+    );
+  }
+
+  Future<void> _recordLowConfidence(CheckInTier tier, String message) async {
+    _outcomes[tier] = _TierOutcome(
+      result: CheckInResult.lowConfidence,
+      confidenceScore: 0,
+      troubleMeasures: const <int>[],
+      feedbackMessages: const <String>['Move closer / quieter area'],
+      timeOnTaskSeconds: 0,
+    );
+    setState(() {
+      _statusText = message;
+    });
+    await _sendCheckInAttempt(
+      tier: tier,
+      result: CheckInResult.lowConfidence,
+      confidenceScore: 0,
+      troubleMeasures: const <int>[],
+      timeOnTaskSeconds: 0,
+    );
+  }
+
+  Future<void> _configureTierPlayback(CheckInTier tier) async {
+    final part = widget.station.lockedPart;
+    const allVoices = <String>['SOP', 'ALTO', 'TENOR', 'BASS'];
+    final otherVoices = allVoices.where((voice) => voice != part).toList();
+    List<String> voices = <String>[];
+    var pianoEnabled = false;
+    switch (tier) {
+      case CheckInTier.partWithMe:
+        voices = <String>[part];
+        pianoEnabled = false;
+        break;
+      case CheckInTier.acapellaClick:
+        voices = <String>[];
+        pianoEnabled = false;
+        break;
+      case CheckInTier.partPlusAccomp:
+        voices = <String>[part];
+        pianoEnabled = true;
+        break;
+      case CheckInTier.accompOnly:
+        voices = <String>[];
+        pianoEnabled = true;
+        break;
+      case CheckInTier.accompPlusOtherParts:
+        voices = otherVoices;
+        pianoEnabled = true;
+        break;
+    }
+    widget.client.sendCommandEnvelope(
+      'SET_PARTS_ENABLED',
+      args: <String, dynamic>{
+        'partsEnabledSet': voices,
+        'pianoEnabled': pianoEnabled,
+      },
+    );
+    widget.client.sendCommandEnvelope(
+      'SET_LOOP_RANGE',
+      args: <String, dynamic>{
+        'a': widget.station.minMeasure,
+        'b': widget.station.maxMeasure,
+      },
+    );
+    widget.client.sendCommandEnvelope(
+      'JUMP_TO_MEASURE',
+      args: <String, dynamic>{
+        'measure': widget.station.minMeasure,
+        'autoPlay': false,
+      },
+    );
+  }
+
+  Future<void> _startingPitchAndCountIn({required bool withClick}) async {
+    widget.client.sendCommandEnvelope('PLAY_STARTING_PITCHES');
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    final beatMs = (60000 / _currentTempo()).round();
+    for (var beat = 8; beat > 0; beat--) {
+      if (withClick) {
+        _playClick();
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusText = 'Count-in $beat';
+      });
+      await Future<void>.delayed(Duration(milliseconds: beatMs));
+    }
+  }
+
+  int _estimateScoredDurationSeconds() {
+    final measures = widget.station.maxMeasure - widget.station.minMeasure + 1;
+    final beats = measures * 4;
+    final seconds = beats * 60 / _currentTempo();
+    return ((seconds.round().clamp(12, 55) as num)).toInt();
+  }
+
+  int _currentTempo() {
+    final state = RokuRemoteState.fromMap(widget.client.latestState);
+    final value = state.tempoPercent > 0 ? state.tempoPercent : widget.station.defaultTempoPercent;
+    return ((value.clamp(50, 120) as num)).toInt();
+  }
+
+  void _startClickTrack() {
+    _stopClickTrack();
+    final beatMs = (60000 / _currentTempo()).round();
+    _clickTimer = Timer.periodic(
+      Duration(milliseconds: beatMs),
+      (_) => _playClick(),
+    );
+  }
+
+  void _stopClickTrack() {
+    _clickTimer?.cancel();
+    _clickTimer = null;
+  }
+
+  void _playClick() {
+    unawaited(SystemSound.play(SystemSoundType.click));
+  }
+
+  Future<void> _sendCheckInAttempt({
+    required CheckInTier tier,
+    required CheckInResult result,
+    required int confidenceScore,
+    required List<int> troubleMeasures,
+    required int timeOnTaskSeconds,
+  }) async {
+    widget.client.sendStudentMessage(
+      'CHECKIN_ATTEMPT',
+      payload: <String, dynamic>{
+        'attemptId': _buildAttemptId(tier),
+        'sessionId': widget.station.sessionId,
+        'stationId': widget.station.stationId,
+        'studentName': widget.studentName,
+        'lockedPart': widget.station.lockedPart,
+        'tier': tier.id,
+        'result': result.id,
+        'timeOnTaskSeconds': timeOnTaskSeconds,
+        'troubleMeasures': troubleMeasures,
+        'confidenceScore': confidenceScore,
+        'timestamp': DateTime.now().toIso8601String(),
+      },
+    );
+  }
+
+  Map<int, ExpectedMeasureProfile> _expectedProfilesForStation() {
+    final output = <int, ExpectedMeasureProfile>{};
+    final raw = widget.client.latestState;
+    final checkInRefRaw = raw['checkInReference'];
+    if (checkInRefRaw is! Map) {
+      return output;
+    }
+    final checkInRef = checkInRefRaw.cast<String, dynamic>();
+    final partRaw = checkInRef[widget.station.lockedPart];
+    if (partRaw is! Map) {
+      return output;
+    }
+    final partMap = partRaw.cast<String, dynamic>();
+    for (var measure = widget.station.minMeasure;
+        measure <= widget.station.maxMeasure;
+        measure++) {
+      final measureRaw = partMap[measure.toString()];
+      if (measureRaw is Map) {
+        final map = measureRaw.cast<String, dynamic>();
+        final expectedMidi = _toDouble(map['medianMidi']) ?? _toDouble(map['avgMidi']) ?? 60;
+        final noteCount = _toInt(map['noteCount']) ?? 0;
+        output[measure] = ExpectedMeasureProfile(
+          measure: measure,
+          expectedMidi: expectedMidi,
+          noteCount: noteCount,
+        );
+      }
+    }
+    return output;
+  }
+
+  Future<void> _practiceFlaggedSpot(int measure) async {
+    final start =
+        ((measure.clamp(widget.station.minMeasure, widget.station.maxMeasure) as num)).toInt();
+    final end = (((start + 1)
+            .clamp(widget.station.minMeasure, widget.station.maxMeasure) as num))
+        .toInt();
+    widget.client.sendCommandEnvelope(
+      'SET_TEMPO_PERCENT',
+      args: const <String, dynamic>{'percent': 70},
+    );
+    widget.client.sendCommandEnvelope(
+      'SET_LOOP_RANGE',
+      args: <String, dynamic>{
+        'a': start,
+        'b': end,
+      },
+    );
+    widget.client.sendCommandEnvelope(
+      'JUMP_TO_MEASURE',
+      args: <String, dynamic>{
+        'measure': start,
+        'autoPlay': true,
+      },
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text('Practice flagged spot: m.$start-$end at 70%'),
+        ),
+      );
+    }
+  }
+
+  CheckInTier _recommendedTier() {
+    if (_outcomes[CheckInTier.partWithMe]?.result != CheckInResult.pass) {
+      return CheckInTier.partWithMe;
+    }
+    if (_outcomes[CheckInTier.acapellaClick]?.result != CheckInResult.pass) {
+      return CheckInTier.acapellaClick;
+    }
+    if (_outcomes[CheckInTier.partPlusAccomp]?.result != CheckInResult.pass) {
+      return CheckInTier.partPlusAccomp;
+    }
+    if (_outcomes[CheckInTier.accompOnly]?.result !=
+        CheckInResult.challengeCompleted) {
+      return CheckInTier.accompOnly;
+    }
+    return CheckInTier.accompPlusOtherParts;
+  }
+
+  String _tierStatusLabel(CheckInTier tier) {
+    if (_running && _activeTier == tier) {
+      return 'RUNNING';
+    }
+    final outcome = _outcomes[tier];
+    if (outcome == null) {
+      return 'PENDING';
+    }
+    return outcome.result.label;
+  }
+
+  String _buildAttemptId(CheckInTier tier) {
+    final now = DateTime.now().microsecondsSinceEpoch;
+    final rand = Random.secure().nextInt(1 << 30);
+    return 'checkin_${tier.id}_$now$rand';
+  }
+}
+
+class _CheckInTierCard extends StatelessWidget {
+  const _CheckInTierCard({
+    required this.tier,
+    required this.statusLabel,
+    required this.subtitle,
+    required this.highlighted,
+    required this.running,
+    required this.onStart,
+    required this.canRetry,
+  });
+
+  final CheckInTier tier;
+  final String statusLabel;
+  final String subtitle;
+  final bool highlighted;
+  final bool running;
+  final VoidCallback? onStart;
+  final bool canRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: highlighted ? _RokuTokens.accent.withOpacity(0.28) : _RokuTokens.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _RokuTokens.border),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${tier.shortLabel}: $subtitle',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _RokuTokens.textPrimary,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _RokuTokens.card,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: _RokuTokens.border),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _RokuTokens.textPrimary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _RokuButton(
+            label: running
+                ? 'RUNNING...'
+                : canRetry
+                    ? 'TRY AGAIN'
+                    : 'START',
+            height: 62,
+            onPressed: onStart,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AssessmentResultCard extends StatelessWidget {
+  const _AssessmentResultCard({
+    required this.result,
+    required this.confidenceScore,
+    required this.troubleMeasures,
+    required this.feedbackMessages,
+    required this.onPracticeFlagged,
+    required this.onTryAgain,
+  });
+
+  final CheckInResult result;
+  final int confidenceScore;
+  final List<int> troubleMeasures;
+  final List<String> feedbackMessages;
+  final VoidCallback? onPracticeFlagged;
+  final VoidCallback? onTryAgain;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _RokuTokens.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _RokuTokens.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            result.label,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: _RokuTokens.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Confidence: $confidenceScore%',
+            style: _RokuTokens.statusSecondary,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            troubleMeasures.isEmpty
+                ? 'Top trouble measures: -'
+                : 'Top trouble measures: ${troubleMeasures.map((m) => 'm.$m').join(', ')}',
+            style: _RokuTokens.statusSecondary,
+          ),
+          if (feedbackMessages.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              feedbackMessages.take(3).join(' | '),
+              style: _RokuTokens.statusSecondary,
+            ),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _RokuButton(
+                  label: 'PRACTICE FLAGGED SPOT',
+                  height: 62,
+                  onPressed: onPracticeFlagged,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _RokuButton(
+                  label: 'TRY AGAIN',
+                  height: 62,
+                  outlined: true,
+                  onPressed: onTryAgain,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TierOutcome {
+  const _TierOutcome({
+    required this.result,
+    required this.confidenceScore,
+    required this.troubleMeasures,
+    required this.feedbackMessages,
+    required this.timeOnTaskSeconds,
+  });
+
+  final CheckInResult result;
+  final int confidenceScore;
+  final List<int> troubleMeasures;
+  final List<String> feedbackMessages;
+  final int timeOnTaskSeconds;
+}
+
 class StationModeConfig {
   StationModeConfig({
     required this.mode,
@@ -2132,6 +2918,22 @@ int? _toInt(Object? value) {
   }
   if (value is String) {
     return int.tryParse(value);
+  }
+  return null;
+}
+
+double? _toDouble(Object? value) {
+  if (value is double) {
+    return value;
+  }
+  if (value is int) {
+    return value.toDouble();
+  }
+  if (value is num) {
+    return value.toDouble();
+  }
+  if (value is String) {
+    return double.tryParse(value);
   }
   return null;
 }

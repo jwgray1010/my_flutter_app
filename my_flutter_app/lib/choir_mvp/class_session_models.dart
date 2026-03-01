@@ -1,5 +1,112 @@
 import 'models.dart';
 
+enum CheckInTier {
+  partWithMe,
+  acapellaClick,
+  partPlusAccomp,
+  accompOnly,
+  accompPlusOtherParts,
+}
+
+extension CheckInTierX on CheckInTier {
+  String get id {
+    switch (this) {
+      case CheckInTier.partWithMe:
+        return 'PART_WITH_ME';
+      case CheckInTier.acapellaClick:
+        return 'ACAPELLA_CLICK';
+      case CheckInTier.partPlusAccomp:
+        return 'PART_PLUS_ACCOMP';
+      case CheckInTier.accompOnly:
+        return 'ACCOMP_ONLY';
+      case CheckInTier.accompPlusOtherParts:
+        return 'ACCOMP_PLUS_OTHER_PARTS';
+    }
+  }
+
+  String get shortLabel {
+    switch (this) {
+      case CheckInTier.partWithMe:
+        return 'Step 1';
+      case CheckInTier.acapellaClick:
+        return 'Step 2';
+      case CheckInTier.partPlusAccomp:
+        return 'Step 3';
+      case CheckInTier.accompOnly:
+        return 'Step 4';
+      case CheckInTier.accompPlusOtherParts:
+        return 'Step 5';
+    }
+  }
+
+  String get title {
+    switch (this) {
+      case CheckInTier.partWithMe:
+        return 'With Your Part';
+      case CheckInTier.acapellaClick:
+        return 'A Cappella + Click';
+      case CheckInTier.partPlusAccomp:
+        return 'With Piano';
+      case CheckInTier.accompOnly:
+        return 'Piano Only (Challenge)';
+      case CheckInTier.accompPlusOtherParts:
+        return 'Full Choir Minus You (Challenge)';
+    }
+  }
+
+  int get order {
+    switch (this) {
+      case CheckInTier.partWithMe:
+        return 1;
+      case CheckInTier.acapellaClick:
+        return 2;
+      case CheckInTier.partPlusAccomp:
+        return 3;
+      case CheckInTier.accompOnly:
+        return 4;
+      case CheckInTier.accompPlusOtherParts:
+        return 5;
+    }
+  }
+
+  bool get isScored => order <= 3;
+}
+
+enum CheckInResult {
+  pass,
+  needsWork,
+  lowConfidence,
+  challengeCompleted,
+}
+
+extension CheckInResultX on CheckInResult {
+  String get id {
+    switch (this) {
+      case CheckInResult.pass:
+        return 'PASS';
+      case CheckInResult.needsWork:
+        return 'NEEDS_WORK';
+      case CheckInResult.lowConfidence:
+        return 'LOW_CONFIDENCE';
+      case CheckInResult.challengeCompleted:
+        return 'CHALLENGE_COMPLETED';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case CheckInResult.pass:
+        return 'PASS';
+      case CheckInResult.needsWork:
+        return 'NEEDS WORK';
+      case CheckInResult.lowConfidence:
+        return 'LOW CONFIDENCE';
+      case CheckInResult.challengeCompleted:
+        return 'CHALLENGE COMPLETED';
+    }
+  }
+}
+
 class PracticeSessionPreset {
   PracticeSessionPreset({
     required this.id,
@@ -344,6 +451,149 @@ class StationAttemptSummary {
   }
 }
 
+class StationCheckInRecord {
+  StationCheckInRecord({
+    required this.attemptId,
+    required this.sessionId,
+    required this.stationId,
+    required this.studentName,
+    required this.lockedPart,
+    required this.tier,
+    required this.result,
+    required this.timeOnTaskSeconds,
+    required this.timestamp,
+    List<int>? troubleMeasures,
+    this.confidenceScore,
+  }) : troubleMeasures = troubleMeasures ?? <int>[];
+
+  final String attemptId;
+  final String sessionId;
+  final String stationId;
+  final String studentName;
+  final ChoirPart lockedPart;
+  final CheckInTier tier;
+  final CheckInResult result;
+  final int timeOnTaskSeconds;
+  final DateTime timestamp;
+  final List<int> troubleMeasures;
+  final int? confidenceScore;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'attemptId': attemptId,
+      'sessionId': sessionId,
+      'stationId': stationId,
+      'studentName': studentName,
+      'lockedPart': _stationPartCode(lockedPart),
+      'tier': tier.id,
+      'result': result.id,
+      'timeOnTaskSeconds': timeOnTaskSeconds,
+      'timestamp': timestamp.toIso8601String(),
+      'troubleMeasures': troubleMeasures,
+      'confidenceScore': confidenceScore,
+    };
+  }
+
+  factory StationCheckInRecord.fromMap(Map<String, dynamic> map) {
+    final troubleRaw = map['troubleMeasures'];
+    final trouble = <int>[];
+    if (troubleRaw is List) {
+      for (final value in troubleRaw) {
+        final parsed = _toInt(value);
+        if (parsed != null) {
+          trouble.add(parsed);
+        }
+      }
+    }
+    return StationCheckInRecord(
+      attemptId: map['attemptId']?.toString() ?? '',
+      sessionId: map['sessionId']?.toString() ?? '',
+      stationId: map['stationId']?.toString() ?? '',
+      studentName: map['studentName']?.toString() ?? '',
+      lockedPart: _partFromStationRaw(map['lockedPart']?.toString() ?? '') ??
+          ChoirPart.alto,
+      tier: checkInTierFromId(map['tier']?.toString() ?? '') ??
+          CheckInTier.partWithMe,
+      result: checkInResultFromId(map['result']?.toString() ?? '') ??
+          CheckInResult.needsWork,
+      timeOnTaskSeconds: _toInt(map['timeOnTaskSeconds']) ?? 0,
+      timestamp: DateTime.tryParse(map['timestamp']?.toString() ?? '') ??
+          DateTime.now(),
+      troubleMeasures: trouble,
+      confidenceScore: _toInt(map['confidenceScore']),
+    );
+  }
+}
+
+class StudentCheckInProgress {
+  StudentCheckInProgress({
+    required this.studentName,
+    required this.stationId,
+    required this.partId,
+    required this.latestTier,
+    required this.latestResult,
+    required this.highestScoredTierPassed,
+    required this.challengeTier4Completed,
+    required this.challengeTier5Completed,
+    required this.latestTroubleMeasures,
+    required this.lastUpdatedAt,
+  });
+
+  final String studentName;
+  final String stationId;
+  final String partId;
+  CheckInTier latestTier;
+  CheckInResult latestResult;
+  int highestScoredTierPassed;
+  bool challengeTier4Completed;
+  bool challengeTier5Completed;
+  List<int> latestTroubleMeasures;
+  DateTime lastUpdatedAt;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'studentName': studentName,
+      'stationId': stationId,
+      'partId': partId,
+      'latestTier': latestTier.id,
+      'latestResult': latestResult.id,
+      'highestScoredTierPassed': highestScoredTierPassed,
+      'challengeTier4Completed': challengeTier4Completed,
+      'challengeTier5Completed': challengeTier5Completed,
+      'latestTroubleMeasures': latestTroubleMeasures,
+      'lastUpdatedAt': lastUpdatedAt.toIso8601String(),
+    };
+  }
+
+  factory StudentCheckInProgress.fromMap(Map<String, dynamic> map) {
+    final troubleRaw = map['latestTroubleMeasures'];
+    final trouble = <int>[];
+    if (troubleRaw is List) {
+      for (final value in troubleRaw) {
+        final parsed = _toInt(value);
+        if (parsed != null) {
+          trouble.add(parsed);
+        }
+      }
+    }
+    return StudentCheckInProgress(
+      studentName: map['studentName']?.toString() ?? '',
+      stationId: map['stationId']?.toString() ?? '',
+      partId: map['partId']?.toString() ?? '',
+      latestTier: checkInTierFromId(map['latestTier']?.toString() ?? '') ??
+          CheckInTier.partWithMe,
+      latestResult: checkInResultFromId(map['latestResult']?.toString() ?? '') ??
+          CheckInResult.needsWork,
+      highestScoredTierPassed: _toInt(map['highestScoredTierPassed']) ?? 0,
+      challengeTier4Completed: map['challengeTier4Completed'] == true,
+      challengeTier5Completed: map['challengeTier5Completed'] == true,
+      latestTroubleMeasures: trouble,
+      lastUpdatedAt: DateTime.tryParse(map['lastUpdatedAt']?.toString() ?? '') ??
+          DateTime.now(),
+    );
+  }
+}
+
 class StudentPracticeRecord {
   StudentPracticeRecord({
     required this.studentName,
@@ -427,6 +677,9 @@ class ClassSessionState {
     Map<String, StationConfig>? stationsById,
     Map<String, StationRuntimeStatus>? stationRuntimeById,
     List<StationAttemptSummary>? stationAttempts,
+    Map<String, StudentCheckInProgress>? checkInProgressByStudentKey,
+    List<StationCheckInRecord>? checkInRecords,
+    Map<String, int>? checkInTroubleByStationMeasure,
   }) : practiceSessions = practiceSessions ?? <PracticeSessionPreset>[],
        rosterByDeviceId = rosterByDeviceId ?? <String, StudentPracticeRecord>{},
        loopRangeCounts = loopRangeCounts ?? <String, int>{},
@@ -434,7 +687,12 @@ class ClassSessionState {
        eventLogs = eventLogs ?? <Map<String, dynamic>>[],
        stationsById = stationsById ?? <String, StationConfig>{},
        stationRuntimeById = stationRuntimeById ?? <String, StationRuntimeStatus>{},
-       stationAttempts = stationAttempts ?? <StationAttemptSummary>[];
+       stationAttempts = stationAttempts ?? <StationAttemptSummary>[],
+       checkInProgressByStudentKey =
+           checkInProgressByStudentKey ?? <String, StudentCheckInProgress>{},
+       checkInRecords = checkInRecords ?? <StationCheckInRecord>[],
+       checkInTroubleByStationMeasure =
+           checkInTroubleByStationMeasure ?? <String, int>{};
 
   final String sessionId;
   final String className;
@@ -449,6 +707,9 @@ class ClassSessionState {
   final Map<String, StationConfig> stationsById;
   final Map<String, StationRuntimeStatus> stationRuntimeById;
   final List<StationAttemptSummary> stationAttempts;
+  final Map<String, StudentCheckInProgress> checkInProgressByStudentKey;
+  final List<StationCheckInRecord> checkInRecords;
+  final Map<String, int> checkInTroubleByStationMeasure;
 
   List<StationConfig> sortedStations() {
     final list = stationsById.values.toList();
@@ -479,6 +740,11 @@ class ClassSessionState {
         (key, value) => MapEntry<String, dynamic>(key, value.toMap()),
       ),
       'stationAttempts': stationAttempts.map((entry) => entry.toMap()).toList(),
+      'checkInProgressByStudentKey': checkInProgressByStudentKey.map(
+        (key, value) => MapEntry<String, dynamic>(key, value.toMap()),
+      ),
+      'checkInRecords': checkInRecords.map((entry) => entry.toMap()).toList(),
+      'checkInTroubleByStationMeasure': checkInTroubleByStationMeasure,
     };
   }
 
@@ -496,6 +762,10 @@ class ClassSessionState {
       'stations': stationsById.values.map((station) => station.toMap()).toList(),
       'stationRuntime': stationRuntimeById.values.map((entry) => entry.toMap()).toList(),
       'stationSummary': _buildStationSummaryMap(),
+      'checkInProgress': checkInProgressByStudentKey.values
+          .map((entry) => entry.toMap())
+          .toList(),
+      'checkInTroubleByStationMeasure': checkInTroubleByStationMeasure,
     };
   }
 
@@ -522,6 +792,9 @@ class ClassSessionState {
     final stationsRaw = map['stationsById'];
     final runtimeRaw = map['stationRuntimeById'];
     final attemptsRaw = map['stationAttempts'];
+    final checkInProgressRaw = map['checkInProgressByStudentKey'];
+    final checkInRecordsRaw = map['checkInRecords'];
+    final checkInTroubleRaw = map['checkInTroubleByStationMeasure'];
 
     final practiceSessions = <PracticeSessionPreset>[];
     if (practiceRaw is List) {
@@ -611,6 +884,38 @@ class ClassSessionState {
       }
     }
 
+    final checkInProgressByStudentKey = <String, StudentCheckInProgress>{};
+    if (checkInProgressRaw is Map) {
+      for (final entry in checkInProgressRaw.entries) {
+        final value = entry.value;
+        if (value is Map) {
+          checkInProgressByStudentKey[entry.key.toString()] =
+              StudentCheckInProgress.fromMap(value.cast<String, dynamic>());
+        }
+      }
+    }
+
+    final checkInRecords = <StationCheckInRecord>[];
+    if (checkInRecordsRaw is List) {
+      for (final entry in checkInRecordsRaw) {
+        if (entry is Map) {
+          checkInRecords.add(
+            StationCheckInRecord.fromMap(entry.cast<String, dynamic>()),
+          );
+        }
+      }
+    }
+
+    final checkInTroubleByStationMeasure = <String, int>{};
+    if (checkInTroubleRaw is Map) {
+      for (final entry in checkInTroubleRaw.entries) {
+        final value = _toInt(entry.value);
+        if (value != null) {
+          checkInTroubleByStationMeasure[entry.key.toString()] = value;
+        }
+      }
+    }
+
     return ClassSessionState(
       sessionId: map['sessionId']?.toString() ?? '',
       className: map['className']?.toString() ?? '',
@@ -626,6 +931,9 @@ class ClassSessionState {
       stationsById: stationsById,
       stationRuntimeById: stationRuntimeById,
       stationAttempts: stationAttempts,
+      checkInProgressByStudentKey: checkInProgressByStudentKey,
+      checkInRecords: checkInRecords,
+      checkInTroubleByStationMeasure: checkInTroubleByStationMeasure,
     );
   }
 }
@@ -673,5 +981,25 @@ String _stationPartCode(ChoirPart part) {
     case ChoirPart.piano:
       return 'PIANO';
   }
+}
+
+CheckInTier? checkInTierFromId(String raw) {
+  final normalized = raw.trim().toUpperCase();
+  for (final tier in CheckInTier.values) {
+    if (tier.id == normalized) {
+      return tier;
+    }
+  }
+  return null;
+}
+
+CheckInResult? checkInResultFromId(String raw) {
+  final normalized = raw.trim().toUpperCase();
+  for (final result in CheckInResult.values) {
+    if (result.id == normalized) {
+      return result;
+    }
+  }
+  return null;
 }
 

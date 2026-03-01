@@ -140,6 +140,51 @@ Station Mode replaces the broader student-session flow with a simpler in-school 
 - `PRACTICE_SUMMARY`
 - `PRACTICE_COMPLETED`
 
+## Sectional Corrector: Check-In Ladder
+
+Station Mode now includes a 5-tier **Check-In** flow:
+
+1. Part With Me (scored)
+2. A Cappella + Click (scored)
+3. Part + Accompaniment (scored)
+4. Accompaniment Only (challenge)
+5. Accompaniment + Other Parts (challenge)
+
+### Scored tiers (1-3)
+
+- Run noise check (ambient RMS)
+- Starting pitch + count-in
+- Record live mic stream on-device (no raw audio saved by default)
+- Compute per-measure pitch/timing/confidence scores
+- Return:
+  - `PASS`, `NEEDS_WORK`, or `LOW_CONFIDENCE`
+  - top trouble measures (max 3)
+  - one-tap **Practice flagged spot** (loop + tempo 70%)
+
+### Challenge tiers (4-5)
+
+- No pass/fail scoring
+- Completion tracked by metrics (`timeOnTaskSeconds` / loop reps)
+- Result recorded as `CHALLENGE_COMPLETED` when threshold is reached
+
+### Teacher View additions
+
+- Latest check-in status per student
+- Highest scored tier passed (1-3)
+- Challenge completion checkmarks (tiers 4-5)
+- Most common trouble measures by station
+
+### Check-in logging payload
+
+- `CHECKIN_ATTEMPT`
+  - `studentName`
+  - `stationId`
+  - `tier`
+  - `result`
+  - `timeOnTaskSeconds`
+  - `troubleMeasures`
+  - `timestamp`
+
 ## Warmups Library (iPad Player)
 
 Warmups now has a dedicated flow on the Player side:

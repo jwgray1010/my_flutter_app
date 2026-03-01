@@ -253,6 +253,10 @@ class _StationTeacherDashboard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stations = session.sortedStations();
+    final stationNameById = <String, String>{
+      for (final station in stations) station.stationId: station.stationName,
+    };
+    final checkInRows = controller.checkInProgressRows();
     return SingleChildScrollView(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -295,6 +299,10 @@ class _StationTeacherDashboard extends StatelessWidget {
                 final totalSeconds = attempts.fold<int>(
                   0,
                   (sum, entry) => sum + entry.timeOnTaskSeconds,
+                );
+                final troubleTop = controller.topTroubleMeasuresForStation(
+                  station.stationId,
+                  limit: 5,
                 );
                 return Card(
                   child: Padding(
@@ -356,11 +364,73 @@ class _StationTeacherDashboard extends StatelessWidget {
                         Text(
                           'Total minutes practiced: ${(totalSeconds / 60).toStringAsFixed(1)}',
                         ),
+                        const SizedBox(height: 6),
+                        Text(
+                          troubleTop.isEmpty
+                              ? 'Common trouble measures: -'
+                              : 'Common trouble measures: ${troubleTop.map((entry) => 'm.${entry.key} (${entry.value})').join(', ')}',
+                        ),
                       ],
                     ),
                   ),
                 );
               },
+            ),
+          const SizedBox(height: 12),
+          const Text(
+            'Check-In Progress',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          if (checkInRows.isEmpty)
+            const Text('No check-in attempts recorded yet.')
+          else
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Student')),
+                  DataColumn(label: Text('Station')),
+                  DataColumn(label: Text('Latest')),
+                  DataColumn(label: Text('Highest Tier Passed')),
+                  DataColumn(label: Text('Tier 4')),
+                  DataColumn(label: Text('Tier 5')),
+                  DataColumn(label: Text('Trouble Measures')),
+                  DataColumn(label: Text('Updated')),
+                ],
+                rows: checkInRows
+                    .map(
+                      (row) => DataRow(
+                        cells: [
+                          DataCell(Text(row.studentName)),
+                          DataCell(
+                            Text(stationNameById[row.stationId] ?? row.stationId),
+                          ),
+                          DataCell(Text(
+                            '${row.latestTier.shortLabel} ${row.latestResult.label}',
+                          )),
+                          DataCell(
+                            Text(row.highestScoredTierPassed <= 0
+                                ? '-'
+                                : 'Tier ${row.highestScoredTierPassed}'),
+                          ),
+                          DataCell(Text(row.challengeTier4Completed ? 'YES' : '-')),
+                          DataCell(Text(row.challengeTier5Completed ? 'YES' : '-')),
+                          DataCell(
+                            Text(
+                              row.latestTroubleMeasures.isEmpty
+                                  ? '-'
+                                  : row.latestTroubleMeasures
+                                        .map((m) => 'm.$m')
+                                        .join(', '),
+                            ),
+                          ),
+                          DataCell(Text(row.lastUpdatedAt.toIso8601String())),
+                        ],
+                      ),
+                    )
+                    .toList(),
+              ),
             ),
         ],
       ),

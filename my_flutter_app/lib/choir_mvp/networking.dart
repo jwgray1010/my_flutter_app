@@ -373,6 +373,7 @@ class LocalPlayerServer {
     return type == 'REGISTER_STATION' ||
         type == 'JOIN_STATION' ||
         type == 'PRACTICE_COMPLETED' ||
+        type == 'CHECKIN_ATTEMPT' ||
         type == 'JOIN_CLASS_SESSION' ||
         type == 'START_PRACTICE_SESSION' ||
         type == 'PRACTICE_EVENT' ||

@@ -49,6 +49,7 @@ class RehearsalController extends ChangeNotifier {
   String? _loadedFileName;
   String _loadedPieceId = 'no_piece';
   String? _errorMessage;
+  Map<String, dynamic>? _checkInReference;
   ClassSessionState? _classSession;
   final Map<String, String> _clientIdToDeviceId = <String, String>{};
 
@@ -182,23 +183,26 @@ class RehearsalController extends ChangeNotifier {
       return '';
     }
     final lines = <String>[
-      'student_name,station_name,locked_part,attempt_id,completed,time_seconds,time_minutes,measure_min,measure_max,tempo_min,tempo_max,loop_reps,started_at,ended_at',
+      'studentName,stationId,tier,result,timeOnTaskSeconds,troubleMeasures,timestamp',
     ];
-    if (active.stationAttempts.isEmpty) {
-      for (final runtime in active.stationRuntimeById.values) {
-        final minutes = (runtime.totalPracticeSeconds / 60).toStringAsFixed(1);
+    if (active.checkInRecords.isEmpty) {
+      for (final progress in active.checkInProgressByStudentKey.values) {
+        final trouble = progress.latestTroubleMeasures.isEmpty
+            ? ''
+            : progress.latestTroubleMeasures.join('|');
         lines.add(
-          '${runtime.activeStudentName ?? ''},${runtime.stationName},${_stationPartCode(runtime.lockedPart)},,false,${runtime.totalPracticeSeconds},$minutes,,,,,,${runtime.lastActivityAt.toIso8601String()},',
+          '${progress.studentName},${progress.stationId},${progress.latestTier.id},${progress.latestResult.id},0,$trouble,${progress.lastUpdatedAt.toIso8601String()}',
         );
       }
       return lines.join('\n');
     }
-    for (final attempt in active.stationAttempts) {
+    for (final attempt in active.checkInRecords) {
       final safeName = attempt.studentName.replaceAll(',', ' ');
-      final safeStation = attempt.stationName.replaceAll(',', ' ');
-      final minutes = (attempt.timeOnTaskSeconds / 60).toStringAsFixed(1);
+      final trouble = attempt.troubleMeasures.isEmpty
+          ? ''
+          : attempt.troubleMeasures.join('|');
       lines.add(
-        '$safeName,$safeStation,${_stationPartCode(attempt.lockedPart)},${attempt.attemptId},${attempt.completed},${attempt.timeOnTaskSeconds},$minutes,${attempt.measuresVisitedMin ?? ''},${attempt.measuresVisitedMax ?? ''},${attempt.tempoMinUsed ?? ''},${attempt.tempoMaxUsed ?? ''},${attempt.loopReps},${attempt.startedAt.toIso8601String()},${attempt.endedAt?.toIso8601String() ?? ''}',
+        '$safeName,${attempt.stationId},${attempt.tier.id},${attempt.result.id},${attempt.timeOnTaskSeconds},$trouble,${attempt.timestamp.toIso8601String()}',
       );
     }
     return lines.join('\n');
@@ -214,6 +218,45 @@ class RehearsalController extends ChangeNotifier {
 
   StationRuntimeStatus? stationRuntime(String stationId) {
     return _classSession?.stationRuntimeById[stationId];
+  }
+
+  List<StudentCheckInProgress> checkInProgressRows() {
+    final active = _classSession;
+    if (active == null) {
+      return const <StudentCheckInProgress>[];
+    }
+    final rows = active.checkInProgressByStudentKey.values.toList();
+    rows.sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+    return rows;
+  }
+
+  List<MapEntry<int, int>> topTroubleMeasuresForStation(
+    String stationId, {
+    int limit = 10,
+  }) {
+    final active = _classSession;
+    if (active == null) {
+      return const <MapEntry<int, int>>[];
+    }
+    final totals = <int, int>{};
+    for (final entry in active.checkInTroubleByStationMeasure.entries) {
+      final key = entry.key;
+      if (!key.startsWith('$stationId:')) {
+        continue;
+      }
+      final parts = key.split(':');
+      if (parts.length != 2) {
+        continue;
+      }
+      final measure = int.tryParse(parts[1]);
+      if (measure == null) {
+        continue;
+      }
+      totals[measure] = (totals[measure] ?? 0) + entry.value;
+    }
+    final sorted = totals.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sorted.take(limit).toList();
   }
 
   Future<void> updateStationConfig({
@@ -312,6 +355,7 @@ class RehearsalController extends ChangeNotifier {
       final xmlContent = await _readSelectedFileAsText(file);
       final score = _parser.parse(xmlContent);
       _playback.loadScore(score);
+      _checkInReference = _buildCheckInReference(score);
       _playbackController.resetLoopArmed();
       _loadedFileName = file.name;
       _loadedPieceId = _buildPieceId(xmlContent);
@@ -814,6 +858,8 @@ class RehearsalController extends ChangeNotifier {
         return _handlePracticeSummary(command);
       case 'PRACTICE_COMPLETED':
         return _handlePracticeCompleted(command);
+      case 'CHECKIN_ATTEMPT':
+        return _handleCheckInAttempt(command);
       default:
         return const CommandExecutionResult(
           applied: false,
@@ -878,6 +924,7 @@ class RehearsalController extends ChangeNotifier {
       'partsEnabled': _playback.enabledParts.map(_partToProtocol).toList(),
       'measures': score?.measureNumbers ?? <int>[],
       'rehearsalMarks': score?.rehearsalMarks ?? <String, int>{},
+      'checkInReference': _checkInReference,
       'activeClassSession': _classSession?.toRemoteMap(),
     };
   }
@@ -984,7 +1031,7 @@ class RehearsalController extends ChangeNotifier {
       return const CommandExecutionResult(applied: false, message: 'Session mismatch');
     }
     final stationId = command['stationId']?.toString() ?? '';
-    final studentName = command['studentName']?.toString().trim() ?? '';
+    final studentName = (command['studentName']?.toString() ?? '').trim();
     final deviceId = command['deviceId']?.toString() ?? '';
     final attemptId = command['attemptId']?.toString() ?? _newId('attempt');
     final station = active.stationsById[stationId];
@@ -1373,6 +1420,118 @@ class RehearsalController extends ChangeNotifier {
     return const CommandExecutionResult(applied: true, message: 'Completion recorded');
   }
 
+  CommandExecutionResult _handleCheckInAttempt(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(applied: false, message: 'No active class session');
+    }
+    final sessionId = command['sessionId']?.toString() ?? '';
+    if (sessionId.isNotEmpty && sessionId != active.sessionId) {
+      return const CommandExecutionResult(applied: false, message: 'Session mismatch');
+    }
+
+    final stationId = command['stationId']?.toString() ?? '';
+    final studentName = command['studentName']?.toString().trim() ?? '';
+    final tier = checkInTierFromId(command['tier']?.toString() ?? '');
+    final result = checkInResultFromId(command['result']?.toString() ?? '');
+    if (stationId.isEmpty || studentName.isEmpty || tier == null || result == null) {
+      return const CommandExecutionResult(applied: false, message: 'Malformed check-in attempt');
+    }
+    final station = active.stationsById[stationId];
+    if (station == null) {
+      return const CommandExecutionResult(applied: false, message: 'Unknown station');
+    }
+    final attemptId = command['attemptId']?.toString() ?? _newId('checkin');
+    final troubleRaw = command['troubleMeasures'];
+    final troubleMeasures = <int>[];
+    if (troubleRaw is List) {
+      for (final value in troubleRaw) {
+        final parsed = _readInt(value);
+        if (parsed != null) {
+          troubleMeasures.add(parsed);
+        }
+      }
+    }
+    final trimmedTrouble = troubleMeasures.take(3).toList();
+    final timeOnTaskSeconds = _readInt(command['timeOnTaskSeconds']) ?? 0;
+    final confidenceScore = _readInt(command['confidenceScore']);
+    final timestamp = DateTime.tryParse(command['timestamp']?.toString() ?? '') ??
+        DateTime.now();
+
+    active.checkInRecords.add(
+      StationCheckInRecord(
+        attemptId: attemptId,
+        sessionId: active.sessionId,
+        stationId: stationId,
+        studentName: studentName,
+        lockedPart: station.lockedPart,
+        tier: tier,
+        result: result,
+        timeOnTaskSeconds: timeOnTaskSeconds,
+        timestamp: timestamp,
+        troubleMeasures: trimmedTrouble,
+        confidenceScore: confidenceScore,
+      ),
+    );
+
+    final progressKey = _studentProgressKey(stationId, studentName);
+    final progress = active.checkInProgressByStudentKey.putIfAbsent(
+      progressKey,
+      () => StudentCheckInProgress(
+        studentName: studentName,
+        stationId: stationId,
+        partId: _stationPartCode(station.lockedPart),
+        latestTier: tier,
+        latestResult: result,
+        highestScoredTierPassed: 0,
+        challengeTier4Completed: false,
+        challengeTier5Completed: false,
+        latestTroubleMeasures: trimmedTrouble,
+        lastUpdatedAt: timestamp,
+      ),
+    );
+    progress.latestTier = tier;
+    progress.latestResult = result;
+    progress.latestTroubleMeasures = trimmedTrouble;
+    progress.lastUpdatedAt = timestamp;
+    if (tier.isScored && result == CheckInResult.pass) {
+      progress.highestScoredTierPassed = progress.highestScoredTierPassed < tier.order
+          ? tier.order
+          : progress.highestScoredTierPassed;
+    }
+    if (tier == CheckInTier.accompOnly && result == CheckInResult.challengeCompleted) {
+      progress.challengeTier4Completed = true;
+    }
+    if (tier == CheckInTier.accompPlusOtherParts &&
+        result == CheckInResult.challengeCompleted) {
+      progress.challengeTier5Completed = true;
+    }
+
+    if (tier.isScored) {
+      for (final measure in trimmedTrouble) {
+        final key = '$stationId:$measure';
+        active.checkInTroubleByStationMeasure[key] =
+            (active.checkInTroubleByStationMeasure[key] ?? 0) + 1;
+      }
+    }
+
+    _logClassEvent(<String, dynamic>{
+      'type': 'CHECKIN_ATTEMPT',
+      'attemptId': attemptId,
+      'stationId': stationId,
+      'studentName': studentName,
+      'tier': tier.id,
+      'result': result.id,
+      'troubleMeasures': trimmedTrouble,
+      'timeOnTaskSeconds': timeOnTaskSeconds,
+      'confidenceScore': confidenceScore,
+      'timestamp': timestamp.toIso8601String(),
+    });
+    unawaited(_persistCurrentClassSession());
+    _broadcastStateAndNotify();
+    return const CommandExecutionResult(applied: true, message: 'Check-in attempt recorded');
+  }
+
   Future<void> _persistCurrentClassSession() async {
     final active = _classSession;
     if (active == null) {
@@ -1508,6 +1667,42 @@ class RehearsalController extends ChangeNotifier {
       case ChoirPart.piano:
         return 'PIANO';
     }
+  }
+
+  String _studentProgressKey(String stationId, String studentName) {
+    return '$stationId|${studentName.trim().toLowerCase()}';
+  }
+
+  Map<String, dynamic> _buildCheckInReference(ParsedScore score) {
+    final byPartMeasure = <String, Map<int, List<int>>>{};
+    for (final note in score.notes) {
+      final part = _partToProtocol(note.part);
+      final measureMap = byPartMeasure.putIfAbsent(part, () => <int, List<int>>{});
+      final list = measureMap.putIfAbsent(note.measureNumber, () => <int>[]);
+      list.add(note.midi);
+    }
+    final response = <String, dynamic>{};
+    byPartMeasure.forEach((part, measureMap) {
+      final partOut = <String, dynamic>{};
+      final entries = measureMap.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      for (final entry in entries) {
+        final values = List<int>.from(entry.value)..sort();
+        if (values.isEmpty) {
+          continue;
+        }
+        final median = values[values.length ~/ 2];
+        final avg = values.fold<int>(0, (sum, value) => sum + value) / values.length;
+        partOut[entry.key.toString()] = <String, dynamic>{
+          'medianMidi': median,
+          'avgMidi': avg.round(),
+          'noteCount': values.length,
+        };
+      }
+      response[part] = partOut;
+    });
+    response['measureNumbers'] = score.measureNumbers;
+    return response;
   }
 
   String _buildPieceId(String xmlContent) {

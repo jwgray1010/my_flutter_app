@@ -87,6 +87,7 @@ dependencies:
   flutter_midi_pro: ^3.1.6
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.2.0
+  record: ^6.1.2
 
 dev_dependencies:
   flutter_test:
