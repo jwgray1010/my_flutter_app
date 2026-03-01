@@ -173,10 +173,32 @@ Station Mode now includes a 5-tier **Check-In** flow:
 - Highest scored tier passed (1-3)
 - Challenge completion checkmarks (tiers 4-5)
 - Most common trouble measures by station
+- Director Gate clearance status and filters
+
+### Director Gate (optional)
+
+Class Session setup now includes a configurable **Director Gate**:
+
+- Gate Enabled: ON/OFF
+- Required clearance tier: 1 / 2 / 3 (scored tiers only)
+- Validity window:
+  - This rehearsal only
+  - Today
+  - Custom minutes
+- Low confidence behavior:
+  - Does not count
+  - Counts as attempt only
+- Retry rule:
+  - Unlimited retries
+  - Optional retry cooldown (seconds)
+
+When gate is enabled, a student is marked **CLEARED** only after passing the required scored tier within the validity window.
+Challenge tiers never grant clearance.
 
 ### Check-in logging payload
 
-- `CHECKIN_ATTEMPT`
+- `CHECKIN_RESULT`
+  - `studentId`
   - `studentName`
   - `stationId`
   - `tier`
@@ -184,6 +206,15 @@ Station Mode now includes a 5-tier **Check-In** flow:
   - `timeOnTaskSeconds`
   - `troubleMeasures`
   - `timestamp`
+
+### Clearance event payload
+
+- `CLEARANCE_STATUS`
+  - `studentId`
+  - `stationId`
+  - `status` (`NOT_CLEARED` / `CLEARED` / `LOW_CONFIDENCE`)
+  - `requiredTier`
+  - `expiresAt`
 
 ## Warmups Library (iPad Player)
 

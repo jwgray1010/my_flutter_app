@@ -320,6 +320,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
   Timer? _tick;
 
   String? _studentName;
+  String? _gateStudentName;
   String? _attemptId;
   bool _isPracticing = false;
   bool _isPlaying = false;
@@ -366,6 +367,11 @@ class _StationModeScreenState extends State<StationModeScreen> {
     final profile = _client.pairedProfile;
     final configured = profile?.mode == 'station_single';
     final station = StationModeConfig.fromProfile(profile);
+    final gateConfig = _directorGateForStation(station);
+    final gateStudentName = _gateStudentName;
+    final gateStatus = gateStudentName == null || gateStudentName.isEmpty
+        ? null
+        : _clearanceForStudent(station, gateStudentName);
     final remoteState = RokuRemoteState.fromMap(_client.latestState);
     final displayMeasure = _isPracticing && _client.isConnected
         ? _clampMeasure(remoteState.currentMeasure, station)
@@ -435,12 +441,42 @@ class _StationModeScreenState extends State<StationModeScreen> {
                             disconnectedText: 'Disconnected',
                           ),
                           const SizedBox(height: 16),
-                          if (!_isPracticing)
+                          if (!_isPracticing) ...[
+                            if (gateConfig.enabled)
+                              _DirectorGateHomeCard(
+                                studentName: gateStudentName,
+                                requiredTier: gateConfig.requiredTier,
+                                status: gateStatus?.status,
+                                troubleMeasures: gateStatus?.troubleMeasures ?? const <int>[],
+                                onPracticeFlagged: (gateStatus?.troubleMeasures ?? const <int>[])
+                                        .isEmpty
+                                    ? null
+                                    : () => _practiceGateFlaggedSpot(
+                                          station,
+                                          (gateStatus?.troubleMeasures ?? const <int>[]).first,
+                                        ),
+                              ),
                             _StationHomePanel(
                               recentNames: _recentNames,
                               onStart: (name) => _startStudentAttempt(station, name),
                               onCheckIn: () => _openCheckIn(station),
+                              checkInLabel: gateConfig.enabled
+                                  ? 'START CHECK-IN'
+                                  : 'CHECK-IN',
                             ),
+                            if (gateConfig.enabled &&
+                                gateStudentName != null &&
+                                gateStudentName.isNotEmpty &&
+                                gateStatus?.status == StudentClearanceStatus.cleared) ...[
+                              const SizedBox(height: 12),
+                              _RokuButton(
+                                label: 'DONE / NEXT STUDENT',
+                                height: 80,
+                                outlined: true,
+                                onPressed: _clearGateStudentContext,
+                              ),
+                            ],
+                          ],
                           if (_isPracticing) ...[
                             _RokuButton(
                               label: _isPlaying ? 'PAUSE' : 'PLAY',
@@ -573,7 +609,9 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (paired == true) {
       _registerStationIfConfigured();
       if (mounted) {
-        setState(_resetPracticeState);
+        setState(() {
+          _resetPracticeState(clearGateStudent: true);
+        });
       }
     }
   }
@@ -582,12 +620,17 @@ class _StationModeScreenState extends State<StationModeScreen> {
     if (!station.isValid) {
       return;
     }
-    final name = await _promptStudentName();
+    String? name = _gateStudentName;
+    if (name == null || name.trim().isEmpty) {
+      name = await _promptStudentName();
+    }
     if (!mounted || name == null || name.trim().isEmpty) {
       return;
     }
+    final trimmedName = name.trim();
+    _gateStudentName = trimmedName;
     _recentNames.remove(name.trim());
-    _recentNames.insert(0, name.trim());
+    _recentNames.insert(0, trimmedName);
     if (_recentNames.length > 6) {
       _recentNames.removeLast();
     }
@@ -596,7 +639,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
         builder: (_) => StationCheckInScreen(
           client: _client,
           station: station,
-          studentName: name.trim(),
+          studentName: trimmedName,
         ),
       ),
     );
@@ -677,6 +720,146 @@ class _StationModeScreenState extends State<StationModeScreen> {
     return false;
   }
 
+  _DirectorGateRemoteConfig _directorGateForStation(StationModeConfig station) {
+    final latestState = _client.latestState;
+    if (latestState == null) {
+      return const _DirectorGateRemoteConfig(
+        enabled: false,
+        requiredTier: CheckInTier.acapellaClick,
+      );
+    }
+    final sessionRaw = latestState['activeClassSession'];
+    if (sessionRaw is! Map) {
+      return const _DirectorGateRemoteConfig(
+        enabled: false,
+        requiredTier: CheckInTier.acapellaClick,
+      );
+    }
+    final session = sessionRaw.cast<String, dynamic>();
+    final gateRaw = session['directorGate'];
+    if (gateRaw is! Map) {
+      return const _DirectorGateRemoteConfig(
+        enabled: false,
+        requiredTier: CheckInTier.acapellaClick,
+      );
+    }
+    final gate = gateRaw.cast<String, dynamic>();
+    final parsedTier = checkInTierFromId(gate['requiredTier']?.toString() ?? '');
+    return _DirectorGateRemoteConfig(
+      enabled: gate['enabled'] == true,
+      requiredTier: parsedTier != null && parsedTier.isScored
+          ? parsedTier
+          : CheckInTier.acapellaClick,
+    );
+  }
+
+  _StudentClearanceSnapshot? _clearanceForStudent(
+    StationModeConfig station,
+    String studentName,
+  ) {
+    final latestState = _client.latestState;
+    if (latestState == null) {
+      return null;
+    }
+    final sessionRaw = latestState['activeClassSession'];
+    if (sessionRaw is! Map) {
+      return null;
+    }
+    final session = sessionRaw.cast<String, dynamic>();
+    final progressRaw = session['checkInProgress'];
+    if (progressRaw is! List) {
+      return null;
+    }
+    final normalizedName = studentName.trim().toLowerCase();
+    for (final row in progressRaw) {
+      if (row is! Map) {
+        continue;
+      }
+      final map = row.cast<String, dynamic>();
+      final rowStationId = map['stationId']?.toString() ?? '';
+      final rowStudent = (map['studentName']?.toString() ?? '').trim().toLowerCase();
+      if (rowStationId != station.stationId || rowStudent != normalizedName) {
+        continue;
+      }
+      final troubleRaw = map['latestTroubleMeasures'];
+      final trouble = <int>[];
+      if (troubleRaw is List) {
+        for (final value in troubleRaw) {
+          final parsed = _toInt(value);
+          if (parsed != null) {
+            trouble.add(parsed);
+          }
+        }
+      }
+      final status =
+          studentClearanceStatusFromId(map['clearanceStatus']?.toString() ?? '') ??
+              StudentClearanceStatus.notCleared;
+      return _StudentClearanceSnapshot(
+        status: status,
+        troubleMeasures: trouble,
+      );
+    }
+    return null;
+  }
+
+  Future<void> _practiceGateFlaggedSpot(StationModeConfig station, int measure) async {
+    final name = _gateStudentName;
+    if (name == null || name.trim().isEmpty) {
+      return;
+    }
+    if (!_isPracticing) {
+      _startStudentAttempt(station, name);
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+    }
+    final clamped = _clampMeasure(measure, station);
+    final end = _clampMeasure(clamped + 1, station);
+    _tempoPercent = 70;
+    _tempoMinUsed = min(_tempoMinUsed, _tempoPercent);
+    _tempoMaxUsed = max(_tempoMaxUsed, _tempoPercent);
+    _loopEnabled = true;
+    _loopA = clamped <= end ? clamped : end;
+    _loopB = clamped <= end ? end : clamped;
+    _currentMeasure = _loopA!;
+    _client.sendCommandEnvelope(
+      'SET_TEMPO_PERCENT',
+      args: const <String, dynamic>{'percent': 70},
+    );
+    _client.sendCommandEnvelope(
+      'SET_LOOP_RANGE',
+      args: <String, dynamic>{'a': _loopA, 'b': _loopB},
+    );
+    _client.sendCommandEnvelope(
+      'JUMP_TO_MEASURE',
+      args: <String, dynamic>{'measure': _loopA, 'autoPlay': true},
+    );
+    _client.sendCommandEnvelope('PLAY');
+    _isPlaying = true;
+    _tick?.cancel();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text('Practice flagged spot: m.${_loopA!}-${_loopB!} at 70%'),
+        ),
+      );
+    }
+  }
+
+  void _clearGateStudentContext() {
+    _gateStudentName = null;
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          duration: Duration(seconds: 1),
+          content: Text('Saved. Next student.'),
+        ),
+      );
+    }
+  }
+
   void _syncFromPlayerState() {
     if (!_isPracticing) {
       return;
@@ -730,6 +913,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
     _registerStationIfConfigured();
     final attemptId = _newAttemptId();
     _studentName = trimmed;
+    _gateStudentName = trimmed;
     _attemptId = attemptId;
     _isPracticing = true;
     _isPlaying = false;
@@ -960,6 +1144,8 @@ class _StationModeScreenState extends State<StationModeScreen> {
       return;
     }
     _tapHaptic();
+    final finishingStudent = _studentName!;
+    final gateConfig = _directorGateForStation(station);
     _tick?.cancel();
     _client.sendStudentMessage(
       'PRACTICE_SUMMARY',
@@ -985,12 +1171,22 @@ class _StationModeScreenState extends State<StationModeScreen> {
         'completed': completed,
       },
     );
-    _resetPracticeState();
+    _gateStudentName = gateConfig.enabled ? finishingStudent : null;
+    _resetPracticeState(clearGateStudent: !gateConfig.enabled);
     setState(() {});
+    final gateStatus = gateConfig.enabled
+        ? _clearanceForStudent(station, finishingStudent)?.status ??
+            StudentClearanceStatus.notCleared
+        : StudentClearanceStatus.notCleared;
+    final snackText = gateConfig.enabled
+        ? (gateStatus == StudentClearanceStatus.cleared
+              ? 'CLEARED. Return to choir and tap DONE / NEXT STUDENT.'
+              : 'Complete Check-In to return to choir.')
+        : 'Saved. Next student.';
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        duration: Duration(seconds: 1),
-        content: Text('Saved. Next student.'),
+      SnackBar(
+        duration: const Duration(seconds: 2),
+        content: Text(snackText),
       ),
     );
   }
@@ -1054,8 +1250,11 @@ class _StationModeScreenState extends State<StationModeScreen> {
     return 'attempt_$now$rand';
   }
 
-  void _resetPracticeState() {
+  void _resetPracticeState({bool clearGateStudent = false}) {
     _studentName = null;
+    if (clearGateStudent) {
+      _gateStudentName = null;
+    }
     _attemptId = null;
     _isPracticing = false;
     _isPlaying = false;
@@ -1685,11 +1884,13 @@ class _StationHomePanel extends StatelessWidget {
     required this.recentNames,
     required this.onStart,
     required this.onCheckIn,
+    this.checkInLabel = 'CHECK-IN',
   });
 
   final List<String> recentNames;
   final void Function(String name) onStart;
   final VoidCallback onCheckIn;
+  final String checkInLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1710,7 +1911,7 @@ class _StationHomePanel extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _RokuButton(
-            label: 'CHECK-IN',
+            label: checkInLabel,
             height: 88,
             onPressed: onCheckIn,
           ),
@@ -1763,6 +1964,100 @@ class _StationHomePanel extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _DirectorGateHomeCard extends StatelessWidget {
+  const _DirectorGateHomeCard({
+    required this.studentName,
+    required this.requiredTier,
+    required this.status,
+    required this.troubleMeasures,
+    required this.onPracticeFlagged,
+  });
+
+  final String? studentName;
+  final CheckInTier requiredTier;
+  final StudentClearanceStatus? status;
+  final List<int> troubleMeasures;
+  final VoidCallback? onPracticeFlagged;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasStudent = studentName != null && studentName!.trim().isNotEmpty;
+    final effectiveStatus = status ?? StudentClearanceStatus.notCleared;
+    Color statusColor;
+    String statusText;
+    if (effectiveStatus == StudentClearanceStatus.cleared) {
+      statusColor = _RokuTokens.success;
+      statusText = 'CLEARED';
+    } else if (effectiveStatus == StudentClearanceStatus.lowConfidence) {
+      statusColor = Colors.amber;
+      statusText = 'LOW CONFIDENCE';
+    } else {
+      statusColor = _RokuTokens.textSecondary;
+      statusText = 'NOT CLEARED';
+    }
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _RokuTokens.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _RokuTokens.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            hasStudent
+                ? '${studentName!.toUpperCase()} - $statusText'
+                : 'DIRECTOR GATE ENABLED',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: hasStudent ? statusColor : _RokuTokens.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Required: ${requiredTier.shortLabel} ${requiredTier.title}',
+            style: _RokuTokens.statusSecondary,
+          ),
+          const SizedBox(height: 4),
+          if (!hasStudent)
+            const Text(
+              'Complete Check-In to return to choir.',
+              style: _RokuTokens.statusSecondary,
+            )
+          else if (effectiveStatus == StudentClearanceStatus.cleared)
+            const Text(
+              'CLEARED. Return to choir and tap DONE / NEXT STUDENT.',
+              style: _RokuTokens.statusSecondary,
+            )
+          else if (effectiveStatus == StudentClearanceStatus.lowConfidence)
+            const Text(
+              'Low confidence attempt not counted. Move closer / quieter area.',
+              style: _RokuTokens.statusSecondary,
+            )
+          else
+            const Text(
+              'Not cleared yet - practice flagged spot then try check-in again.',
+              style: _RokuTokens.statusSecondary,
+            ),
+          if (hasStudent &&
+              effectiveStatus == StudentClearanceStatus.notCleared &&
+              troubleMeasures.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _RokuButton(
+              label: 'PRACTICE FLAGGED SPOT',
+              height: 60,
+              onPressed: onPracticeFlagged,
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -2036,14 +2331,32 @@ class _StationCheckInScreenState extends State<StationCheckInScreen> {
   int? _lastMeasure;
 
   @override
+  void initState() {
+    super.initState();
+    widget.client.addListener(_handleClientUpdate);
+  }
+
+  @override
   void dispose() {
+    widget.client.removeListener(_handleClientUpdate);
     _clickTimer?.cancel();
     unawaited(_audioCapture.dispose());
     super.dispose();
   }
 
+  void _handleClientUpdate() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
+    final gateConfig = _directorGateConfig();
+    final clearance = _clearanceSnapshot();
+    final isCleared =
+        clearance?.status == StudentClearanceStatus.cleared;
     final recommended = _recommendedTier();
     final lastOutcome = _lastTierRun == null ? null : _outcomes[_lastTierRun!];
     return Scaffold(
@@ -2079,6 +2392,23 @@ class _StationCheckInScreenState extends State<StationCheckInScreen> {
                 textAlign: TextAlign.center,
                 style: _RokuTokens.statusSecondary,
               ),
+              if (gateConfig.enabled) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Required clearance: ${gateConfig.requiredTier.shortLabel}',
+                  textAlign: TextAlign.center,
+                  style: _RokuTokens.statusSecondary,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  isCleared ? 'CLEARED - Return to choir' : 'NOT CLEARED',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: isCleared ? _RokuTokens.success : _RokuTokens.textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Expanded(
                 child: ListView.separated(
@@ -2128,7 +2458,7 @@ class _StationCheckInScreenState extends State<StationCheckInScreen> {
                 label: 'DONE / NEXT STUDENT',
                 height: 76,
                 outlined: true,
-                onPressed: _running
+                onPressed: _running || (gateConfig.enabled && !isCleared)
                     ? null
                     : () {
                         _tapHaptic();
@@ -2236,13 +2566,26 @@ class _StationCheckInScreenState extends State<StationCheckInScreen> {
     setState(() {
       _statusText = '${tier.shortLabel} ${assessment.result.label}';
     });
-    await _sendCheckInAttempt(
+    await _sendCheckInResult(
       tier: tier,
       result: assessment.result,
       confidenceScore: assessment.overallConfidence,
       troubleMeasures: assessment.troubleMeasures,
       timeOnTaskSeconds: recorded.durationSeconds.round(),
     );
+    final gateConfig = _directorGateConfig();
+    if (gateConfig.enabled) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final clearance = _clearanceSnapshot();
+      final cleared = clearance?.status == StudentClearanceStatus.cleared;
+      if (mounted) {
+        setState(() {
+          _statusText = cleared
+              ? 'CLEARED. Return to choir.'
+              : 'Not cleared yet - practice flagged spot, then retry.';
+        });
+      }
+    }
   }
 
   Future<void> _runChallengeTier(CheckInTier tier) async {
@@ -2292,7 +2635,7 @@ class _StationCheckInScreenState extends State<StationCheckInScreen> {
           ? '${tier.shortLabel} Challenge completed'
           : '${tier.shortLabel} Challenge stopped';
     });
-    await _sendCheckInAttempt(
+    await _sendCheckInResult(
       tier: tier,
       result: result,
       confidenceScore: 100,
@@ -2312,7 +2655,7 @@ class _StationCheckInScreenState extends State<StationCheckInScreen> {
     setState(() {
       _statusText = message;
     });
-    await _sendCheckInAttempt(
+    await _sendCheckInResult(
       tier: tier,
       result: CheckInResult.lowConfidence,
       confidenceScore: 0,
@@ -2421,7 +2764,7 @@ class _StationCheckInScreenState extends State<StationCheckInScreen> {
     unawaited(SystemSound.play(SystemSoundType.click));
   }
 
-  Future<void> _sendCheckInAttempt({
+  Future<void> _sendCheckInResult({
     required CheckInTier tier,
     required CheckInResult result,
     required int confidenceScore,
@@ -2429,9 +2772,10 @@ class _StationCheckInScreenState extends State<StationCheckInScreen> {
     required int timeOnTaskSeconds,
   }) async {
     widget.client.sendStudentMessage(
-      'CHECKIN_ATTEMPT',
+      'CHECKIN_RESULT',
       payload: <String, dynamic>{
         'attemptId': _buildAttemptId(tier),
+        'studentId': _studentId,
         'sessionId': widget.station.sessionId,
         'stationId': widget.station.stationId,
         'studentName': widget.studentName,
@@ -2446,9 +2790,100 @@ class _StationCheckInScreenState extends State<StationCheckInScreen> {
     );
   }
 
+  String get _studentId =>
+      '${widget.station.stationId}_${widget.studentName.trim().toLowerCase()}';
+
+  _DirectorGateRemoteConfig _directorGateConfig() {
+    final latestState = widget.client.latestState;
+    if (latestState == null) {
+      return const _DirectorGateRemoteConfig(
+        enabled: false,
+        requiredTier: CheckInTier.acapellaClick,
+      );
+    }
+    final sessionRaw = latestState['activeClassSession'];
+    if (sessionRaw is! Map) {
+      return const _DirectorGateRemoteConfig(
+        enabled: false,
+        requiredTier: CheckInTier.acapellaClick,
+      );
+    }
+    final session = sessionRaw.cast<String, dynamic>();
+    final gateRaw = session['directorGate'];
+    if (gateRaw is! Map) {
+      return const _DirectorGateRemoteConfig(
+        enabled: false,
+        requiredTier: CheckInTier.acapellaClick,
+      );
+    }
+    final gate = gateRaw.cast<String, dynamic>();
+    final parsedTier = checkInTierFromId(gate['requiredTier']?.toString() ?? '');
+    return _DirectorGateRemoteConfig(
+      enabled: gate['enabled'] == true,
+      requiredTier: parsedTier != null && parsedTier.isScored
+          ? parsedTier
+          : CheckInTier.acapellaClick,
+    );
+  }
+
+  _StudentClearanceSnapshot? _clearanceSnapshot() {
+    final event = widget.client.clearanceStatusForStudent(_studentId);
+    if (event != null) {
+      final status = studentClearanceStatusFromId(event['status']?.toString() ?? '');
+      if (status != null) {
+        return _StudentClearanceSnapshot(status: status, troubleMeasures: const <int>[]);
+      }
+    }
+    final latestState = widget.client.latestState;
+    if (latestState == null) {
+      return null;
+    }
+    final sessionRaw = latestState['activeClassSession'];
+    if (sessionRaw is! Map) {
+      return null;
+    }
+    final session = sessionRaw.cast<String, dynamic>();
+    final rowsRaw = session['checkInProgress'];
+    if (rowsRaw is! List) {
+      return null;
+    }
+    final stationId = widget.station.stationId;
+    final studentName = widget.studentName.trim().toLowerCase();
+    for (final row in rowsRaw) {
+      if (row is! Map) {
+        continue;
+      }
+      final map = row.cast<String, dynamic>();
+      if ((map['stationId']?.toString() ?? '') != stationId) {
+        continue;
+      }
+      if ((map['studentName']?.toString() ?? '').trim().toLowerCase() != studentName) {
+        continue;
+      }
+      final status =
+          studentClearanceStatusFromId(map['clearanceStatus']?.toString() ?? '') ??
+              StudentClearanceStatus.notCleared;
+      final trouble = <int>[];
+      final troubleRaw = map['latestTroubleMeasures'];
+      if (troubleRaw is List) {
+        for (final value in troubleRaw) {
+          final parsed = _toInt(value);
+          if (parsed != null) {
+            trouble.add(parsed);
+          }
+        }
+      }
+      return _StudentClearanceSnapshot(status: status, troubleMeasures: trouble);
+    }
+    return null;
+  }
+
   Map<int, ExpectedMeasureProfile> _expectedProfilesForStation() {
     final output = <int, ExpectedMeasureProfile>{};
     final raw = widget.client.latestState;
+    if (raw == null) {
+      return output;
+    }
     final checkInRefRaw = raw['checkInReference'];
     if (checkInRefRaw is! Map) {
       return output;
@@ -2720,6 +3155,26 @@ class _TierOutcome {
   final List<int> troubleMeasures;
   final List<String> feedbackMessages;
   final int timeOnTaskSeconds;
+}
+
+class _DirectorGateRemoteConfig {
+  const _DirectorGateRemoteConfig({
+    required this.enabled,
+    required this.requiredTier,
+  });
+
+  final bool enabled;
+  final CheckInTier requiredTier;
+}
+
+class _StudentClearanceSnapshot {
+  const _StudentClearanceSnapshot({
+    required this.status,
+    required this.troubleMeasures,
+  });
+
+  final StudentClearanceStatus status;
+  final List<int> troubleMeasures;
 }
 
 class StationModeConfig {

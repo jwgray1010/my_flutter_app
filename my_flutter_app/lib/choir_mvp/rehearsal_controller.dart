@@ -182,8 +182,9 @@ class RehearsalController extends ChangeNotifier {
     if (active == null) {
       return '';
     }
+    _refreshClearanceExpirations();
     final lines = <String>[
-      'studentName,stationId,tier,result,timeOnTaskSeconds,troubleMeasures,timestamp',
+      'studentName,studentId,stationId,tier,result,timeOnTaskSeconds,troubleMeasures,clearanceStatus,timestamp',
     ];
     if (active.checkInRecords.isEmpty) {
       for (final progress in active.checkInProgressByStudentKey.values) {
@@ -191,7 +192,7 @@ class RehearsalController extends ChangeNotifier {
             ? ''
             : progress.latestTroubleMeasures.join('|');
         lines.add(
-          '${progress.studentName},${progress.stationId},${progress.latestTier.id},${progress.latestResult.id},0,$trouble,${progress.lastUpdatedAt.toIso8601String()}',
+          '${progress.studentName},${progress.studentId},${progress.stationId},${progress.latestTier.id},${progress.latestResult.id},0,$trouble,${progress.clearanceStatus.id},${progress.lastUpdatedAt.toIso8601String()}',
         );
       }
       return lines.join('\n');
@@ -201,8 +202,15 @@ class RehearsalController extends ChangeNotifier {
       final trouble = attempt.troubleMeasures.isEmpty
           ? ''
           : attempt.troubleMeasures.join('|');
+      final progressKey = _studentProgressKey(
+        attempt.stationId,
+        attempt.studentId,
+        attempt.studentName,
+      );
+      final clearance = active.checkInProgressByStudentKey[progressKey]?.clearanceStatus.id ??
+          StudentClearanceStatus.notCleared.id;
       lines.add(
-        '$safeName,${attempt.stationId},${attempt.tier.id},${attempt.result.id},${attempt.timeOnTaskSeconds},$trouble,${attempt.timestamp.toIso8601String()}',
+        '$safeName,${attempt.studentId},${attempt.stationId},${attempt.tier.id},${attempt.result.id},${attempt.timeOnTaskSeconds},$trouble,$clearance,${attempt.timestamp.toIso8601String()}',
       );
     }
     return lines.join('\n');
@@ -225,9 +233,31 @@ class RehearsalController extends ChangeNotifier {
     if (active == null) {
       return const <StudentCheckInProgress>[];
     }
+    _refreshClearanceExpirations();
     final rows = active.checkInProgressByStudentKey.values.toList();
     rows.sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
     return rows;
+  }
+
+  Map<StudentClearanceStatus, int> clearanceCounts() {
+    final active = _classSession;
+    if (active == null) {
+      return <StudentClearanceStatus, int>{
+        StudentClearanceStatus.notCleared: 0,
+        StudentClearanceStatus.cleared: 0,
+        StudentClearanceStatus.lowConfidence: 0,
+      };
+    }
+    _refreshClearanceExpirations();
+    final counts = <StudentClearanceStatus, int>{
+      StudentClearanceStatus.notCleared: 0,
+      StudentClearanceStatus.cleared: 0,
+      StudentClearanceStatus.lowConfidence: 0,
+    };
+    for (final row in active.checkInProgressByStudentKey.values) {
+      counts[row.clearanceStatus] = (counts[row.clearanceStatus] ?? 0) + 1;
+    }
+    return counts;
   }
 
   List<MapEntry<int, int>> topTroubleMeasuresForStation(
@@ -310,6 +340,53 @@ class RehearsalController extends ChangeNotifier {
     _broadcastStateAndNotify();
   }
 
+  Future<void> updateDirectorGateSettings({
+    required bool enabled,
+    required CheckInTier requiredTier,
+    required DirectorGateValidityWindow validityWindow,
+    required int customMinutes,
+    required DirectorGateLowConfidenceBehavior lowConfidenceBehavior,
+    required int retryCooldownSeconds,
+  }) async {
+    final active = _classSession;
+    if (active == null) {
+      return;
+    }
+    final scoredTier = requiredTier.isScored
+        ? requiredTier
+        : CheckInTier.acapellaClick;
+    active.directorGate = active.directorGate.copyWith(
+      enabled: enabled,
+      requiredTier: scoredTier,
+      validityWindow: validityWindow,
+      customMinutes: (customMinutes.clamp(1, 24 * 60) as num).toInt(),
+      lowConfidenceBehavior: lowConfidenceBehavior,
+      retryCooldownSeconds: (retryCooldownSeconds.clamp(0, 60 * 30) as num).toInt(),
+    );
+    if (enabled) {
+      for (final progress in active.checkInProgressByStudentKey.values) {
+        if (progress.clearanceStatus != StudentClearanceStatus.cleared) {
+          continue;
+        }
+        final passedTier = progress.clearanceTierPassed ?? 0;
+        if (passedTier < scoredTier.order) {
+          progress.clearanceStatus = StudentClearanceStatus.notCleared;
+          progress.clearanceTierPassed = null;
+          progress.clearanceTimestamp = null;
+          progress.clearanceExpiresAt = null;
+          continue;
+        }
+        if (progress.clearanceTimestamp != null) {
+          progress.clearanceExpiresAt =
+              _clearanceExpiresAt(active.directorGate, progress.clearanceTimestamp!);
+        }
+      }
+    }
+    _refreshClearanceExpirations();
+    await _persistCurrentClassSession();
+    _broadcastStateAndNotify();
+  }
+
   Future<Map<String, dynamic>> stationPairingPayload(String stationId) async {
     final active = _classSession;
     if (active == null) {
@@ -329,6 +406,7 @@ class RehearsalController extends ChangeNotifier {
         'lockedPart': _stationPartCode(station.lockedPart),
         if (station.stationPasscode != null) 'stationPasscode': station.stationPasscode,
         'practice': station.practiceSession.toMap(),
+        'directorGate': active.directorGate.toMap(),
       },
     );
   }
@@ -859,7 +937,8 @@ class RehearsalController extends ChangeNotifier {
       case 'PRACTICE_COMPLETED':
         return _handlePracticeCompleted(command);
       case 'CHECKIN_ATTEMPT':
-        return _handleCheckInAttempt(command);
+      case 'CHECKIN_RESULT':
+        return _handleCheckInResult(command);
       default:
         return const CommandExecutionResult(
           applied: false,
@@ -907,6 +986,7 @@ class RehearsalController extends ChangeNotifier {
   }
 
   Map<String, dynamic> _buildRemoteState() {
+    _refreshClearanceExpirations();
     final score = _playback.score;
     final loopEnabled = _playback.loopA != null && _playback.loopB != null;
     return <String, dynamic>{
@@ -1096,6 +1176,29 @@ class RehearsalController extends ChangeNotifier {
     }
     unawaited(_playbackController.jumpToMeasure(station.practiceSession.minMeasure));
 
+    final studentId = _studentIdFor(stationId: stationId, studentName: studentName);
+    final progressKey = _studentProgressKey(stationId, studentId, studentName);
+    StudentCheckInProgress? existingProgress =
+        active.checkInProgressByStudentKey[progressKey];
+    if (existingProgress == null) {
+      for (final row in active.checkInProgressByStudentKey.values) {
+        if (row.stationId == stationId &&
+            row.studentName.trim().toLowerCase() ==
+                studentName.trim().toLowerCase()) {
+          existingProgress = row;
+          break;
+        }
+      }
+    }
+    _broadcastClearanceStatus(
+      session: active,
+      stationId: stationId,
+      studentId: studentId,
+      studentName: studentName,
+      status: existingProgress?.clearanceStatus ?? StudentClearanceStatus.notCleared,
+      expiresAt: existingProgress?.clearanceExpiresAt,
+    );
+
     _logClassEvent(<String, dynamic>{
       'type': 'JOIN_STATION',
       'stationId': stationId,
@@ -1124,7 +1227,7 @@ class RehearsalController extends ChangeNotifier {
         message: 'Session mismatch',
       );
     }
-    final studentName = command['studentName']?.toString().trim() ?? '';
+    final studentName = (command['studentName']?.toString() ?? '').trim();
     final part = command['part']?.toString().toUpperCase() ?? '';
     final deviceId = command['deviceId']?.toString() ?? '';
     if (studentName.isEmpty || deviceId.isEmpty) {
@@ -1420,7 +1523,7 @@ class RehearsalController extends ChangeNotifier {
     return const CommandExecutionResult(applied: true, message: 'Completion recorded');
   }
 
-  CommandExecutionResult _handleCheckInAttempt(Map<String, dynamic> command) {
+  CommandExecutionResult _handleCheckInResult(Map<String, dynamic> command) {
     final active = _classSession;
     if (active == null) {
       return const CommandExecutionResult(applied: false, message: 'No active class session');
@@ -1431,17 +1534,38 @@ class RehearsalController extends ChangeNotifier {
     }
 
     final stationId = command['stationId']?.toString() ?? '';
-    final studentName = command['studentName']?.toString().trim() ?? '';
+    final studentName = (command['studentName']?.toString() ?? '').trim();
+    final incomingStudentId = (command['studentId']?.toString() ?? '').trim();
     final tier = checkInTierFromId(command['tier']?.toString() ?? '');
     final result = checkInResultFromId(command['result']?.toString() ?? '');
     if (stationId.isEmpty || studentName.isEmpty || tier == null || result == null) {
-      return const CommandExecutionResult(applied: false, message: 'Malformed check-in attempt');
+      return const CommandExecutionResult(applied: false, message: 'Malformed check-in result');
     }
     final station = active.stationsById[stationId];
     if (station == null) {
       return const CommandExecutionResult(applied: false, message: 'Unknown station');
     }
     final attemptId = command['attemptId']?.toString() ?? _newId('checkin');
+    final studentId = incomingStudentId.isNotEmpty
+        ? incomingStudentId
+        : _studentIdFor(stationId: stationId, studentName: studentName);
+    final gate = active.directorGate;
+    if (gate.enabled && tier.isScored && gate.retryCooldownSeconds > 0) {
+      final recent = _latestScoredCheckIn(
+        active,
+        stationId: stationId,
+        studentId: studentId,
+      );
+      if (recent != null) {
+        final elapsed = DateTime.now().difference(recent.timestamp).inSeconds;
+        if (elapsed < gate.retryCooldownSeconds) {
+          return CommandExecutionResult(
+            applied: false,
+            message: 'Practice ${gate.retryCooldownSeconds}s before retrying.',
+          );
+        }
+      }
+    }
     final troubleRaw = command['troubleMeasures'];
     final troubleMeasures = <int>[];
     if (troubleRaw is List) {
@@ -1463,6 +1587,7 @@ class RehearsalController extends ChangeNotifier {
         attemptId: attemptId,
         sessionId: active.sessionId,
         stationId: stationId,
+        studentId: studentId,
         studentName: studentName,
         lockedPart: station.lockedPart,
         tier: tier,
@@ -1474,12 +1599,19 @@ class RehearsalController extends ChangeNotifier {
       ),
     );
 
-    final progressKey = _studentProgressKey(stationId, studentName);
+    final progressKey = _studentProgressKey(stationId, studentId, studentName);
+    final legacyKey = '$stationId|${studentName.trim().toLowerCase()}';
+    final legacyProgress = active.checkInProgressByStudentKey[legacyKey];
+    if (legacyProgress != null && !active.checkInProgressByStudentKey.containsKey(progressKey)) {
+      active.checkInProgressByStudentKey[progressKey] = legacyProgress;
+      active.checkInProgressByStudentKey.remove(legacyKey);
+    }
     final progress = active.checkInProgressByStudentKey.putIfAbsent(
       progressKey,
       () => StudentCheckInProgress(
         studentName: studentName,
         stationId: stationId,
+        studentId: studentId,
         partId: _stationPartCode(station.lockedPart),
         latestTier: tier,
         latestResult: result,
@@ -1492,8 +1624,15 @@ class RehearsalController extends ChangeNotifier {
     );
     progress.latestTier = tier;
     progress.latestResult = result;
-    progress.latestTroubleMeasures = trimmedTrouble;
+    if (tier.isScored && trimmedTrouble.isNotEmpty) {
+      progress.latestTroubleMeasures = trimmedTrouble;
+    }
     progress.lastUpdatedAt = timestamp;
+    progress.clearanceStatus = _effectiveClearanceStatus(
+      progress.clearanceStatus,
+      progress.clearanceExpiresAt,
+      DateTime.now(),
+    );
     if (tier.isScored && result == CheckInResult.pass) {
       progress.highestScoredTierPassed = progress.highestScoredTierPassed < tier.order
           ? tier.order
@@ -1506,8 +1645,15 @@ class RehearsalController extends ChangeNotifier {
         result == CheckInResult.challengeCompleted) {
       progress.challengeTier5Completed = true;
     }
+    _applyDirectorGateOnCheckIn(
+      session: active,
+      progress: progress,
+      tier: tier,
+      result: result,
+      timestamp: timestamp,
+    );
 
-    if (tier.isScored) {
+    if (tier.isScored && result != CheckInResult.lowConfidence) {
       for (final measure in trimmedTrouble) {
         final key = '$stationId:$measure';
         active.checkInTroubleByStationMeasure[key] =
@@ -1516,8 +1662,9 @@ class RehearsalController extends ChangeNotifier {
     }
 
     _logClassEvent(<String, dynamic>{
-      'type': 'CHECKIN_ATTEMPT',
+      'type': 'CHECKIN_RESULT',
       'attemptId': attemptId,
+      'studentId': studentId,
       'stationId': stationId,
       'studentName': studentName,
       'tier': tier.id,
@@ -1527,9 +1674,17 @@ class RehearsalController extends ChangeNotifier {
       'confidenceScore': confidenceScore,
       'timestamp': timestamp.toIso8601String(),
     });
+    _broadcastClearanceStatus(
+      session: active,
+      stationId: stationId,
+      studentId: studentId,
+      studentName: studentName,
+      status: progress.clearanceStatus,
+      expiresAt: progress.clearanceExpiresAt,
+    );
     unawaited(_persistCurrentClassSession());
     _broadcastStateAndNotify();
-    return const CommandExecutionResult(applied: true, message: 'Check-in attempt recorded');
+    return const CommandExecutionResult(applied: true, message: 'Check-in result recorded');
   }
 
   Future<void> _persistCurrentClassSession() async {
@@ -1669,8 +1824,173 @@ class RehearsalController extends ChangeNotifier {
     }
   }
 
-  String _studentProgressKey(String stationId, String studentName) {
+  String _studentProgressKey(
+    String stationId,
+    String studentId,
+    String studentName,
+  ) {
+    final normalizedStudentId = studentId.trim();
+    if (normalizedStudentId.isNotEmpty) {
+      return '$stationId|$normalizedStudentId';
+    }
     return '$stationId|${studentName.trim().toLowerCase()}';
+  }
+
+  String _studentIdFor({
+    required String stationId,
+    required String studentName,
+  }) {
+    return '${stationId}_${studentName.trim().toLowerCase()}';
+  }
+
+  StationCheckInRecord? _latestScoredCheckIn(
+    ClassSessionState session, {
+    required String stationId,
+    required String studentId,
+  }) {
+    for (var i = session.checkInRecords.length - 1; i >= 0; i--) {
+      final entry = session.checkInRecords[i];
+      if (entry.stationId != stationId || entry.studentId != studentId) {
+        continue;
+      }
+      if (entry.tier.isScored) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  void _applyDirectorGateOnCheckIn({
+    required ClassSessionState session,
+    required StudentCheckInProgress progress,
+    required CheckInTier tier,
+    required CheckInResult result,
+    required DateTime timestamp,
+  }) {
+    final gate = session.directorGate;
+    final currentStatus = _effectiveClearanceStatus(
+      progress.clearanceStatus,
+      progress.clearanceExpiresAt,
+      timestamp,
+    );
+    progress.clearanceStatus = currentStatus;
+    if (currentStatus != StudentClearanceStatus.cleared &&
+        progress.clearanceExpiresAt != null &&
+        timestamp.isAfter(progress.clearanceExpiresAt!)) {
+      progress.clearanceTierPassed = null;
+      progress.clearanceTimestamp = null;
+      progress.clearanceExpiresAt = null;
+    }
+
+    if (!gate.enabled || !tier.isScored) {
+      return;
+    }
+    if (result == CheckInResult.lowConfidence) {
+      if (gate.lowConfidenceBehavior ==
+          DirectorGateLowConfidenceBehavior.doesNotCount) {
+        if (progress.clearanceStatus != StudentClearanceStatus.cleared) {
+          progress.clearanceStatus = StudentClearanceStatus.lowConfidence;
+        }
+      } else if (progress.clearanceStatus != StudentClearanceStatus.cleared) {
+        progress.clearanceStatus = StudentClearanceStatus.notCleared;
+      }
+      return;
+    }
+
+    if (result == CheckInResult.pass && tier.order >= gate.requiredTier.order) {
+      progress.clearanceStatus = StudentClearanceStatus.cleared;
+      progress.clearanceTierPassed = tier.order;
+      progress.clearanceTimestamp = timestamp;
+      progress.clearanceExpiresAt = _clearanceExpiresAt(gate, timestamp);
+      return;
+    }
+
+    if (progress.clearanceStatus != StudentClearanceStatus.cleared) {
+      progress.clearanceStatus = StudentClearanceStatus.notCleared;
+    }
+  }
+
+  DateTime? _clearanceExpiresAt(
+    DirectorGateSettings gate,
+    DateTime timestamp,
+  ) {
+    switch (gate.validityWindow) {
+      case DirectorGateValidityWindow.rehearsalOnly:
+        return null;
+      case DirectorGateValidityWindow.today:
+        return DateTime(
+          timestamp.year,
+          timestamp.month,
+          timestamp.day,
+          23,
+          59,
+          59,
+          999,
+        );
+      case DirectorGateValidityWindow.customMinutes:
+        return timestamp.add(Duration(minutes: gate.customMinutes));
+    }
+  }
+
+  StudentClearanceStatus _effectiveClearanceStatus(
+    StudentClearanceStatus status,
+    DateTime? expiresAt,
+    DateTime now,
+  ) {
+    if (status != StudentClearanceStatus.cleared) {
+      return status;
+    }
+    if (expiresAt == null) {
+      return status;
+    }
+    return now.isAfter(expiresAt)
+        ? StudentClearanceStatus.notCleared
+        : StudentClearanceStatus.cleared;
+  }
+
+  void _refreshClearanceExpirations() {
+    final active = _classSession;
+    if (active == null) {
+      return;
+    }
+    final now = DateTime.now();
+    for (final progress in active.checkInProgressByStudentKey.values) {
+      final before = progress.clearanceStatus;
+      final effective = _effectiveClearanceStatus(
+        before,
+        progress.clearanceExpiresAt,
+        now,
+      );
+      progress.clearanceStatus = effective;
+      if (before == StudentClearanceStatus.cleared &&
+          effective != StudentClearanceStatus.cleared &&
+          progress.clearanceExpiresAt != null &&
+          now.isAfter(progress.clearanceExpiresAt!)) {
+        progress.clearanceTierPassed = null;
+        progress.clearanceTimestamp = null;
+        progress.clearanceExpiresAt = null;
+      }
+    }
+  }
+
+  void _broadcastClearanceStatus({
+    required ClassSessionState session,
+    required String stationId,
+    required String studentId,
+    required String studentName,
+    required StudentClearanceStatus status,
+    DateTime? expiresAt,
+  }) {
+    _server.broadcastEvent(<String, dynamic>{
+      'type': 'CLEARANCE_STATUS',
+      'studentId': studentId,
+      'studentName': studentName,
+      'stationId': stationId,
+      'status': status.id,
+      'requiredTier': session.directorGate.requiredTier.id,
+      'expiresAt': expiresAt?.toIso8601String(),
+      'gateEnabled': session.directorGate.enabled,
+    });
   }
 
   Map<String, dynamic> _buildCheckInReference(ParsedScore score) {

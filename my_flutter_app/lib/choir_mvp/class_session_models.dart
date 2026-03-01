@@ -107,6 +107,164 @@ extension CheckInResultX on CheckInResult {
   }
 }
 
+enum DirectorGateValidityWindow {
+  rehearsalOnly,
+  today,
+  customMinutes,
+}
+
+extension DirectorGateValidityWindowX on DirectorGateValidityWindow {
+  String get id {
+    switch (this) {
+      case DirectorGateValidityWindow.rehearsalOnly:
+        return 'REHEARSAL_ONLY';
+      case DirectorGateValidityWindow.today:
+        return 'TODAY';
+      case DirectorGateValidityWindow.customMinutes:
+        return 'CUSTOM_MINUTES';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case DirectorGateValidityWindow.rehearsalOnly:
+        return 'This rehearsal only';
+      case DirectorGateValidityWindow.today:
+        return 'Today';
+      case DirectorGateValidityWindow.customMinutes:
+        return 'Custom minutes';
+    }
+  }
+}
+
+enum DirectorGateLowConfidenceBehavior {
+  doesNotCount,
+  countsAsAttemptOnly,
+}
+
+extension DirectorGateLowConfidenceBehaviorX on DirectorGateLowConfidenceBehavior {
+  String get id {
+    switch (this) {
+      case DirectorGateLowConfidenceBehavior.doesNotCount:
+        return 'DOES_NOT_COUNT';
+      case DirectorGateLowConfidenceBehavior.countsAsAttemptOnly:
+        return 'COUNTS_AS_ATTEMPT_ONLY';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case DirectorGateLowConfidenceBehavior.doesNotCount:
+        return 'Does not count';
+      case DirectorGateLowConfidenceBehavior.countsAsAttemptOnly:
+        return 'Counts as attempt only';
+    }
+  }
+}
+
+enum StudentClearanceStatus {
+  notCleared,
+  cleared,
+  lowConfidence,
+}
+
+extension StudentClearanceStatusX on StudentClearanceStatus {
+  String get id {
+    switch (this) {
+      case StudentClearanceStatus.notCleared:
+        return 'NOT_CLEARED';
+      case StudentClearanceStatus.cleared:
+        return 'CLEARED';
+      case StudentClearanceStatus.lowConfidence:
+        return 'LOW_CONFIDENCE';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case StudentClearanceStatus.notCleared:
+        return 'NOT CLEARED';
+      case StudentClearanceStatus.cleared:
+        return 'CLEARED';
+      case StudentClearanceStatus.lowConfidence:
+        return 'LOW CONFIDENCE';
+    }
+  }
+}
+
+class DirectorGateSettings {
+  const DirectorGateSettings({
+    this.enabled = false,
+    this.requiredTier = CheckInTier.acapellaClick,
+    this.validityWindow = DirectorGateValidityWindow.rehearsalOnly,
+    this.customMinutes = 60,
+    this.lowConfidenceBehavior = DirectorGateLowConfidenceBehavior.doesNotCount,
+    this.retryCooldownSeconds = 0,
+  });
+
+  final bool enabled;
+  final CheckInTier requiredTier;
+  final DirectorGateValidityWindow validityWindow;
+  final int customMinutes;
+  final DirectorGateLowConfidenceBehavior lowConfidenceBehavior;
+  final int retryCooldownSeconds;
+
+  bool get hasRetryCooldown => retryCooldownSeconds > 0;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'enabled': enabled,
+      'requiredTier': requiredTier.id,
+      'validityWindow': validityWindow.id,
+      'customMinutes': customMinutes,
+      'lowConfidenceBehavior': lowConfidenceBehavior.id,
+      'retryCooldownSeconds': retryCooldownSeconds,
+    };
+  }
+
+  factory DirectorGateSettings.fromMap(Map<String, dynamic> map) {
+    final parsedTier = checkInTierFromId(map['requiredTier']?.toString() ?? '');
+    final requiredTier = parsedTier != null && parsedTier.isScored
+        ? parsedTier
+        : CheckInTier.acapellaClick;
+    return DirectorGateSettings(
+      enabled: map['enabled'] == true,
+      requiredTier: requiredTier,
+      validityWindow: directorGateValidityWindowFromId(
+              map['validityWindow']?.toString() ?? '') ??
+          DirectorGateValidityWindow.rehearsalOnly,
+      customMinutes:
+          (((_toInt(map['customMinutes']) ?? 60).clamp(1, 24 * 60)) as num)
+              .toInt(),
+      lowConfidenceBehavior: directorGateLowConfidenceBehaviorFromId(
+              map['lowConfidenceBehavior']?.toString() ?? '') ??
+          DirectorGateLowConfidenceBehavior.doesNotCount,
+      retryCooldownSeconds:
+          (((_toInt(map['retryCooldownSeconds']) ?? 0).clamp(0, 60 * 30)) as num)
+              .toInt(),
+    );
+  }
+
+  DirectorGateSettings copyWith({
+    bool? enabled,
+    CheckInTier? requiredTier,
+    DirectorGateValidityWindow? validityWindow,
+    int? customMinutes,
+    DirectorGateLowConfidenceBehavior? lowConfidenceBehavior,
+    int? retryCooldownSeconds,
+  }) {
+    final tier = requiredTier ?? this.requiredTier;
+    return DirectorGateSettings(
+      enabled: enabled ?? this.enabled,
+      requiredTier: tier.isScored ? tier : this.requiredTier,
+      validityWindow: validityWindow ?? this.validityWindow,
+      customMinutes: customMinutes ?? this.customMinutes,
+      lowConfidenceBehavior: lowConfidenceBehavior ?? this.lowConfidenceBehavior,
+      retryCooldownSeconds: retryCooldownSeconds ?? this.retryCooldownSeconds,
+    );
+  }
+}
+
 class PracticeSessionPreset {
   PracticeSessionPreset({
     required this.id,
@@ -456,6 +614,7 @@ class StationCheckInRecord {
     required this.attemptId,
     required this.sessionId,
     required this.stationId,
+    required this.studentId,
     required this.studentName,
     required this.lockedPart,
     required this.tier,
@@ -469,6 +628,7 @@ class StationCheckInRecord {
   final String attemptId;
   final String sessionId;
   final String stationId;
+  final String studentId;
   final String studentName;
   final ChoirPart lockedPart;
   final CheckInTier tier;
@@ -483,6 +643,7 @@ class StationCheckInRecord {
       'attemptId': attemptId,
       'sessionId': sessionId,
       'stationId': stationId,
+      'studentId': studentId,
       'studentName': studentName,
       'lockedPart': _stationPartCode(lockedPart),
       'tier': tier.id,
@@ -505,11 +666,16 @@ class StationCheckInRecord {
         }
       }
     }
+    final stationId = map['stationId']?.toString() ?? '';
+    final studentName = map['studentName']?.toString() ?? '';
+    final rawStudentId = (map['studentId']?.toString() ?? '').trim();
+    final fallbackStudentId = '${stationId}_${studentName.trim().toLowerCase()}';
     return StationCheckInRecord(
       attemptId: map['attemptId']?.toString() ?? '',
       sessionId: map['sessionId']?.toString() ?? '',
-      stationId: map['stationId']?.toString() ?? '',
-      studentName: map['studentName']?.toString() ?? '',
+      stationId: stationId,
+      studentId: rawStudentId.isNotEmpty ? rawStudentId : fallbackStudentId,
+      studentName: studentName,
       lockedPart: _partFromStationRaw(map['lockedPart']?.toString() ?? '') ??
           ChoirPart.alto,
       tier: checkInTierFromId(map['tier']?.toString() ?? '') ??
@@ -529,6 +695,7 @@ class StudentCheckInProgress {
   StudentCheckInProgress({
     required this.studentName,
     required this.stationId,
+    required this.studentId,
     required this.partId,
     required this.latestTier,
     required this.latestResult,
@@ -537,10 +704,15 @@ class StudentCheckInProgress {
     required this.challengeTier5Completed,
     required this.latestTroubleMeasures,
     required this.lastUpdatedAt,
+    this.clearanceStatus = StudentClearanceStatus.notCleared,
+    this.clearanceTierPassed,
+    this.clearanceTimestamp,
+    this.clearanceExpiresAt,
   });
 
   final String studentName;
   final String stationId;
+  final String studentId;
   final String partId;
   CheckInTier latestTier;
   CheckInResult latestResult;
@@ -549,11 +721,16 @@ class StudentCheckInProgress {
   bool challengeTier5Completed;
   List<int> latestTroubleMeasures;
   DateTime lastUpdatedAt;
+  StudentClearanceStatus clearanceStatus;
+  int? clearanceTierPassed;
+  DateTime? clearanceTimestamp;
+  DateTime? clearanceExpiresAt;
 
   Map<String, dynamic> toMap() {
     return <String, dynamic>{
       'studentName': studentName,
       'stationId': stationId,
+      'studentId': studentId,
       'partId': partId,
       'latestTier': latestTier.id,
       'latestResult': latestResult.id,
@@ -562,6 +739,10 @@ class StudentCheckInProgress {
       'challengeTier5Completed': challengeTier5Completed,
       'latestTroubleMeasures': latestTroubleMeasures,
       'lastUpdatedAt': lastUpdatedAt.toIso8601String(),
+      'clearanceStatus': clearanceStatus.id,
+      'clearanceTierPassed': clearanceTierPassed,
+      'clearanceTimestamp': clearanceTimestamp?.toIso8601String(),
+      'clearanceExpiresAt': clearanceExpiresAt?.toIso8601String(),
     };
   }
 
@@ -576,9 +757,14 @@ class StudentCheckInProgress {
         }
       }
     }
+    final studentName = map['studentName']?.toString() ?? '';
+    final stationId = map['stationId']?.toString() ?? '';
+    final rawStudentId = (map['studentId']?.toString() ?? '').trim();
+    final fallbackStudentId = '${stationId}_${studentName.trim().toLowerCase()}';
     return StudentCheckInProgress(
-      studentName: map['studentName']?.toString() ?? '',
-      stationId: map['stationId']?.toString() ?? '',
+      studentName: studentName,
+      stationId: stationId,
+      studentId: rawStudentId.isNotEmpty ? rawStudentId : fallbackStudentId,
       partId: map['partId']?.toString() ?? '',
       latestTier: checkInTierFromId(map['latestTier']?.toString() ?? '') ??
           CheckInTier.partWithMe,
@@ -590,6 +776,14 @@ class StudentCheckInProgress {
       latestTroubleMeasures: trouble,
       lastUpdatedAt: DateTime.tryParse(map['lastUpdatedAt']?.toString() ?? '') ??
           DateTime.now(),
+      clearanceStatus:
+          studentClearanceStatusFromId(map['clearanceStatus']?.toString() ?? '') ??
+              StudentClearanceStatus.notCleared,
+      clearanceTierPassed: _toInt(map['clearanceTierPassed']),
+      clearanceTimestamp:
+          DateTime.tryParse(map['clearanceTimestamp']?.toString() ?? ''),
+      clearanceExpiresAt:
+          DateTime.tryParse(map['clearanceExpiresAt']?.toString() ?? ''),
     );
   }
 }
@@ -669,6 +863,7 @@ class ClassSessionState {
     required this.pieceId,
     required this.createdAt,
     required this.pairingToken,
+    DirectorGateSettings? directorGate,
     List<PracticeSessionPreset>? practiceSessions,
     Map<String, StudentPracticeRecord>? rosterByDeviceId,
     Map<String, int>? loopRangeCounts,
@@ -680,7 +875,8 @@ class ClassSessionState {
     Map<String, StudentCheckInProgress>? checkInProgressByStudentKey,
     List<StationCheckInRecord>? checkInRecords,
     Map<String, int>? checkInTroubleByStationMeasure,
-  }) : practiceSessions = practiceSessions ?? <PracticeSessionPreset>[],
+  }) : directorGate = directorGate ?? const DirectorGateSettings(),
+       practiceSessions = practiceSessions ?? <PracticeSessionPreset>[],
        rosterByDeviceId = rosterByDeviceId ?? <String, StudentPracticeRecord>{},
        loopRangeCounts = loopRangeCounts ?? <String, int>{},
        measureVisitCounts = measureVisitCounts ?? <int, int>{},
@@ -699,6 +895,7 @@ class ClassSessionState {
   final String pieceId;
   final DateTime createdAt;
   final String pairingToken;
+  DirectorGateSettings directorGate;
   final List<PracticeSessionPreset> practiceSessions;
   final Map<String, StudentPracticeRecord> rosterByDeviceId;
   final Map<String, int> loopRangeCounts;
@@ -724,6 +921,7 @@ class ClassSessionState {
       'pieceId': pieceId,
       'createdAt': createdAt.toIso8601String(),
       'pairingToken': pairingToken,
+      'directorGate': directorGate.toMap(),
       'practiceSessions': practiceSessions.map((session) => session.toMap()).toList(),
       'rosterByDeviceId': rosterByDeviceId.map(
         (key, value) => MapEntry<String, dynamic>(key, value.toMap()),
@@ -753,6 +951,7 @@ class ClassSessionState {
       'sessionId': sessionId,
       'className': className,
       'createdAt': createdAt.toIso8601String(),
+      'directorGate': directorGate.toMap(),
       'practiceSessions': practiceSessions.map((session) => session.toMap()).toList(),
       'roster': rosterByDeviceId.values.map((entry) => entry.toMap()).toList(),
       'loopRangeCounts': loopRangeCounts,
@@ -795,6 +994,7 @@ class ClassSessionState {
     final checkInProgressRaw = map['checkInProgressByStudentKey'];
     final checkInRecordsRaw = map['checkInRecords'];
     final checkInTroubleRaw = map['checkInTroubleByStationMeasure'];
+    final directorGateRaw = map['directorGate'];
 
     final practiceSessions = <PracticeSessionPreset>[];
     if (practiceRaw is List) {
@@ -923,6 +1123,9 @@ class ClassSessionState {
       createdAt:
           DateTime.tryParse(map['createdAt']?.toString() ?? '') ?? DateTime.now(),
       pairingToken: map['pairingToken']?.toString() ?? '',
+      directorGate: directorGateRaw is Map
+          ? DirectorGateSettings.fromMap(directorGateRaw.cast<String, dynamic>())
+          : const DirectorGateSettings(),
       practiceSessions: practiceSessions,
       rosterByDeviceId: rosterByDeviceId,
       loopRangeCounts: loopRangeCounts,
@@ -998,6 +1201,38 @@ CheckInResult? checkInResultFromId(String raw) {
   for (final result in CheckInResult.values) {
     if (result.id == normalized) {
       return result;
+    }
+  }
+  return null;
+}
+
+DirectorGateValidityWindow? directorGateValidityWindowFromId(String raw) {
+  final normalized = raw.trim().toUpperCase();
+  for (final value in DirectorGateValidityWindow.values) {
+    if (value.id == normalized) {
+      return value;
+    }
+  }
+  return null;
+}
+
+DirectorGateLowConfidenceBehavior? directorGateLowConfidenceBehaviorFromId(
+  String raw,
+) {
+  final normalized = raw.trim().toUpperCase();
+  for (final value in DirectorGateLowConfidenceBehavior.values) {
+    if (value.id == normalized) {
+      return value;
+    }
+  }
+  return null;
+}
+
+StudentClearanceStatus? studentClearanceStatusFromId(String raw) {
+  final normalized = raw.trim().toUpperCase();
+  for (final value in StudentClearanceStatus.values) {
+    if (value.id == normalized) {
+      return value;
     }
   }
   return null;

@@ -104,6 +104,13 @@ class LocalPlayerServer {
     _broadcastJson(message);
   }
 
+  void broadcastEvent(Map<String, dynamic> event) {
+    if (_authedClients.isEmpty) {
+      return;
+    }
+    _broadcastJson(event);
+  }
+
   Future<void> stop() async {
     _stateTickTimer?.cancel();
     _stateTickTimer = null;
@@ -374,6 +381,7 @@ class LocalPlayerServer {
         type == 'JOIN_STATION' ||
         type == 'PRACTICE_COMPLETED' ||
         type == 'CHECKIN_ATTEMPT' ||
+        type == 'CHECKIN_RESULT' ||
         type == 'JOIN_CLASS_SESSION' ||
         type == 'START_PRACTICE_SESSION' ||
         type == 'PRACTICE_EVENT' ||
@@ -530,6 +538,8 @@ class RemoteClient extends ChangeNotifier {
   Timer? _reconnectTimer;
   PlayerPairingProfile? _pairedProfile;
   Map<String, dynamic>? _latestState;
+  final Map<String, Map<String, dynamic>> _clearanceByStudentId =
+      <String, Map<String, dynamic>>{};
 
   bool _connecting = false;
   bool _authenticated = false;
@@ -545,6 +555,9 @@ class RemoteClient extends ChangeNotifier {
   bool get isConnecting => _connecting;
   PlayerPairingProfile? get pairedProfile => _pairedProfile;
   List<DiscoveredPlayer> get discoveredPlayers => _discoveredPlayers;
+  Map<String, dynamic>? clearanceStatusForStudent(String studentId) {
+    return _clearanceByStudentId[studentId];
+  }
   String get deviceId {
     final existing = _deviceId;
     if (existing != null && existing.isNotEmpty) {
@@ -668,6 +681,7 @@ class RemoteClient extends ChangeNotifier {
     _manualDisconnect = false;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _clearanceByStudentId.clear();
     _connectionStatus = 'Connecting...';
     notifyListeners();
 
@@ -784,6 +798,7 @@ class RemoteClient extends ChangeNotifier {
       } catch (_) {}
     }
     _authenticated = false;
+    _clearanceByStudentId.clear();
     if (manual) {
       _connectionStatus = 'Disconnected';
     }
@@ -831,6 +846,13 @@ class RemoteClient extends ChangeNotifier {
             _manualDisconnect = true;
           }
           notifyListeners();
+          break;
+        case 'CLEARANCE_STATUS':
+          final studentId = map['studentId']?.toString() ?? '';
+          if (studentId.isNotEmpty) {
+            _clearanceByStudentId[studentId] = map;
+            notifyListeners();
+          }
           break;
         default:
           return;

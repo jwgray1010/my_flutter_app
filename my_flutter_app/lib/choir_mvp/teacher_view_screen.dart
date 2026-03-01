@@ -21,6 +21,8 @@ class TeacherViewScreen extends StatefulWidget {
 }
 
 class _TeacherViewScreenState extends State<TeacherViewScreen> {
+  bool _showNotClearedOnly = false;
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -55,6 +57,13 @@ class _TeacherViewScreenState extends State<TeacherViewScreen> {
                   controller: widget.controller,
                   onEditStation: _showEditStationDialog,
                   onShowStationQr: _showStationQr,
+                  onConfigureDirectorGate: _showDirectorGateDialog,
+                  showNotClearedOnly: _showNotClearedOnly,
+                  onToggleNotClearedOnly: (value) {
+                    setState(() {
+                      _showNotClearedOnly = value;
+                    });
+                  },
                 ),
         );
       },
@@ -225,6 +234,179 @@ class _TeacherViewScreenState extends State<TeacherViewScreen> {
     );
   }
 
+  Future<void> _showDirectorGateDialog() async {
+    final session = widget.controller.classSession;
+    if (session == null) {
+      return;
+    }
+    var gateEnabled = session.directorGate.enabled;
+    var requiredTier = session.directorGate.requiredTier;
+    var validityWindow = session.directorGate.validityWindow;
+    var customMinutes = session.directorGate.customMinutes;
+    var lowConfidenceBehavior = session.directorGate.lowConfidenceBehavior;
+    var retryCooldownSeconds = session.directorGate.retryCooldownSeconds;
+    var unlimitedRetry = retryCooldownSeconds <= 0;
+    final customMinutesController = TextEditingController(
+      text: '$customMinutes',
+    );
+    final cooldownController = TextEditingController(
+      text: '${retryCooldownSeconds <= 0 ? 30 : retryCooldownSeconds}',
+    );
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              title: const Text('Director Gate'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Gate Enabled'),
+                      value: gateEnabled,
+                      onChanged: (value) => setStateDialog(() => gateEnabled = value),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('Required Clearance Tier'),
+                    DropdownButtonFormField<CheckInTier>(
+                      value: requiredTier.isScored
+                          ? requiredTier
+                          : CheckInTier.acapellaClick,
+                      items: const [
+                        DropdownMenuItem(
+                          value: CheckInTier.partWithMe,
+                          child: Text('Tier 1 (With Your Part)'),
+                        ),
+                        DropdownMenuItem(
+                          value: CheckInTier.acapellaClick,
+                          child: Text('Tier 2 (A Cappella + Click)'),
+                        ),
+                        DropdownMenuItem(
+                          value: CheckInTier.partPlusAccomp,
+                          child: Text('Tier 3 (With Piano)'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setStateDialog(() => requiredTier = value);
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    const Text('Clearance Validity Window'),
+                    DropdownButtonFormField<DirectorGateValidityWindow>(
+                      value: validityWindow,
+                      items: DirectorGateValidityWindow.values
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(value.label),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setStateDialog(() => validityWindow = value);
+                      },
+                    ),
+                    if (validityWindow == DirectorGateValidityWindow.customMinutes) ...[
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: customMinutesController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Custom minutes',
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    const Text('Low Confidence Behavior'),
+                    DropdownButtonFormField<DirectorGateLowConfidenceBehavior>(
+                      value: lowConfidenceBehavior,
+                      items: DirectorGateLowConfidenceBehavior.values
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(value.label),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setStateDialog(() => lowConfidenceBehavior = value);
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Unlimited retries'),
+                      value: unlimitedRetry,
+                      onChanged: (value) {
+                        setStateDialog(() => unlimitedRetry = value);
+                      },
+                    ),
+                    if (!unlimitedRetry) ...[
+                      TextField(
+                        controller: cooldownController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Retry cooldown seconds',
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Nice-to-have rule: require brief practice before retry.',
+                        style: TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    customMinutes =
+                        int.tryParse(customMinutesController.text.trim()) ?? customMinutes;
+                    retryCooldownSeconds = unlimitedRetry
+                        ? 0
+                        : (int.tryParse(cooldownController.text.trim()) ?? 30);
+                    await widget.controller.updateDirectorGateSettings(
+                      enabled: gateEnabled,
+                      requiredTier: requiredTier,
+                      validityWindow: validityWindow,
+                      customMinutes: customMinutes,
+                      lowConfidenceBehavior: lowConfidenceBehavior,
+                      retryCooldownSeconds: retryCooldownSeconds,
+                    );
+                    if (!mounted) {
+                      return;
+                    }
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _exportCsv() async {
     final csv = widget.controller.buildClassSessionCsv();
     if (csv.isEmpty) {
@@ -243,12 +425,18 @@ class _StationTeacherDashboard extends StatelessWidget {
     required this.controller,
     required this.onEditStation,
     required this.onShowStationQr,
+    required this.onConfigureDirectorGate,
+    required this.showNotClearedOnly,
+    required this.onToggleNotClearedOnly,
   });
 
   final ClassSessionState session;
   final RehearsalController controller;
   final Future<void> Function(StationConfig station) onEditStation;
   final Future<void> Function(StationConfig station) onShowStationQr;
+  final Future<void> Function() onConfigureDirectorGate;
+  final bool showNotClearedOnly;
+  final ValueChanged<bool> onToggleNotClearedOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -257,6 +445,12 @@ class _StationTeacherDashboard extends StatelessWidget {
       for (final station in stations) station.stationId: station.stationName,
     };
     final checkInRows = controller.checkInProgressRows();
+    final clearanceCounts = controller.clearanceCounts();
+    final filteredCheckInRows = showNotClearedOnly
+        ? checkInRows
+            .where((row) => row.clearanceStatus != StudentClearanceStatus.cleared)
+            .toList()
+        : checkInRows;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -281,6 +475,45 @@ class _StationTeacherDashboard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Director Gate',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    session.directorGate.enabled
+                        ? 'Enabled | Required ${session.directorGate.requiredTier.shortLabel}'
+                        : 'Disabled',
+                  ),
+                  Text(
+                    'Validity: ${session.directorGate.validityWindow.label}'
+                    '${session.directorGate.validityWindow == DirectorGateValidityWindow.customMinutes ? ' (${session.directorGate.customMinutes} min)' : ''}',
+                  ),
+                  Text(
+                    'Low confidence: ${session.directorGate.lowConfidenceBehavior.label}',
+                  ),
+                  Text(
+                    session.directorGate.hasRetryCooldown
+                        ? 'Retry cooldown: ${session.directorGate.retryCooldownSeconds}s'
+                        : 'Retry: Unlimited',
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: onConfigureDirectorGate,
+                    icon: const Icon(Icons.rule),
+                    label: const Text('Configure Director Gate'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
           const Text(
             'Stations',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
@@ -295,6 +528,13 @@ class _StationTeacherDashboard extends StatelessWidget {
                 final attempts = session.stationAttempts
                     .where((entry) => entry.stationId == station.stationId)
                     .toList();
+                final stationProgress = checkInRows
+                    .where((entry) => entry.stationId == station.stationId)
+                    .toList();
+                final stationCleared = stationProgress
+                    .where((entry) => entry.clearanceStatus == StudentClearanceStatus.cleared)
+                    .length;
+                final stationNotCleared = stationProgress.length - stationCleared;
                 final completed = attempts.where((entry) => entry.completed).length;
                 final totalSeconds = attempts.fold<int>(
                   0,
@@ -364,6 +604,9 @@ class _StationTeacherDashboard extends StatelessWidget {
                         Text(
                           'Total minutes practiced: ${(totalSeconds / 60).toStringAsFixed(1)}',
                         ),
+                        Text(
+                          'Clearance: $stationCleared cleared / $stationNotCleared not cleared',
+                        ),
                         const SizedBox(height: 6),
                         Text(
                           troubleTop.isEmpty
@@ -377,12 +620,47 @@ class _StationTeacherDashboard extends StatelessWidget {
               },
             ),
           const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Clearance Overview',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'CLEARED: ${clearanceCounts[StudentClearanceStatus.cleared] ?? 0}    '
+                    'NOT CLEARED: ${clearanceCounts[StudentClearanceStatus.notCleared] ?? 0}    '
+                    'LOW CONFIDENCE: ${clearanceCounts[StudentClearanceStatus.lowConfidence] ?? 0}',
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: showNotClearedOnly,
+                        onChanged: (value) =>
+                            onToggleNotClearedOnly(value ?? false),
+                      ),
+                      const SizedBox(width: 6),
+                      const Expanded(
+                        child: Text('Show NOT CLEARED / LOW CONFIDENCE only'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           const Text(
             'Check-In Progress',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
-          if (checkInRows.isEmpty)
+          if (filteredCheckInRows.isEmpty)
             const Text('No check-in attempts recorded yet.')
           else
             SingleChildScrollView(
@@ -391,6 +669,7 @@ class _StationTeacherDashboard extends StatelessWidget {
                 columns: const [
                   DataColumn(label: Text('Student')),
                   DataColumn(label: Text('Station')),
+                  DataColumn(label: Text('Clearance')),
                   DataColumn(label: Text('Latest')),
                   DataColumn(label: Text('Highest Tier Passed')),
                   DataColumn(label: Text('Tier 4')),
@@ -398,7 +677,7 @@ class _StationTeacherDashboard extends StatelessWidget {
                   DataColumn(label: Text('Trouble Measures')),
                   DataColumn(label: Text('Updated')),
                 ],
-                rows: checkInRows
+                rows: filteredCheckInRows
                     .map(
                       (row) => DataRow(
                         cells: [
@@ -406,6 +685,7 @@ class _StationTeacherDashboard extends StatelessWidget {
                           DataCell(
                             Text(stationNameById[row.stationId] ?? row.stationId),
                           ),
+                          DataCell(Text(_clearanceLabel(row.clearanceStatus))),
                           DataCell(Text(
                             '${row.latestTier.shortLabel} ${row.latestResult.label}',
                           )),
@@ -450,6 +730,17 @@ String _stationPartCode(ChoirPart part) {
       return 'BASS';
     case ChoirPart.piano:
       return 'PIANO';
+  }
+}
+
+String _clearanceLabel(StudentClearanceStatus status) {
+  switch (status) {
+    case StudentClearanceStatus.cleared:
+      return 'CLEARED';
+    case StudentClearanceStatus.lowConfidence:
+      return 'LOW CONFIDENCE (not counted)';
+    case StudentClearanceStatus.notCleared:
+      return 'NOT CLEARED';
   }
 }
 
