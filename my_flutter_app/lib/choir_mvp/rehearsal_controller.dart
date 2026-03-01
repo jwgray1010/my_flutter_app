@@ -13,6 +13,7 @@ import 'musicxml_parser.dart';
 import 'networking.dart';
 import 'playback_controller.dart';
 import 'playback_engine.dart';
+import 'vocal_coach_models.dart';
 
 class CommandExecutionResult {
   const CommandExecutionResult({
@@ -24,6 +25,28 @@ class CommandExecutionResult {
   final bool applied;
   final String message;
   final String? suggestion;
+}
+
+class VocalCoachStudentRow {
+  const VocalCoachStudentRow({
+    required this.studentId,
+    required this.studentName,
+    required this.focusAreas,
+    required this.baselineScore,
+    required this.latestMicroCheckScore,
+    required this.improvementDelta,
+    required this.lastUpdatedAt,
+    this.stationId,
+  });
+
+  final String studentId;
+  final String studentName;
+  final List<VocalFocusArea> focusAreas;
+  final int baselineScore;
+  final int? latestMicroCheckScore;
+  final int? improvementDelta;
+  final DateTime lastUpdatedAt;
+  final String? stationId;
 }
 
 class RehearsalController extends ChangeNotifier {
@@ -287,6 +310,100 @@ class RehearsalController extends ChangeNotifier {
     final sorted = totals.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     return sorted.take(limit).toList();
+  }
+
+  List<VocalCoachStudentRow> vocalCoachRows() {
+    final active = _classSession;
+    if (active == null) {
+      return const <VocalCoachStudentRow>[];
+    }
+    final rows = <VocalCoachStudentRow>[];
+    for (final profile in active.vocalProfilesByStudentId.values) {
+      final latestProgress = _latestVocalProgress(
+        active,
+        studentId: profile.studentId,
+      );
+      final latestScore = latestProgress?.microCheckScore;
+      final improvement = latestScore == null ? null : latestScore - profile.baselineComposite;
+      rows.add(
+        VocalCoachStudentRow(
+          studentId: profile.studentId,
+          studentName: profile.studentName,
+          focusAreas: profile.focusAreas,
+          baselineScore: profile.baselineComposite,
+          latestMicroCheckScore: latestScore,
+          improvementDelta: improvement,
+          lastUpdatedAt: latestProgress?.timestamp ?? profile.timestamp,
+          stationId: profile.stationId,
+        ),
+      );
+    }
+    rows.sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+    return rows;
+  }
+
+  Map<VocalFocusArea, int> vocalCoachSectionWeakness() {
+    final active = _classSession;
+    if (active == null) {
+      return <VocalFocusArea, int>{};
+    }
+    final counts = <VocalFocusArea, int>{};
+    for (final profile in active.vocalProfilesByStudentId.values) {
+      for (final focus in profile.focusAreas) {
+        counts[focus] = (counts[focus] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }
+
+  Future<void> saveVocalCoachProfile({
+    required VocalSkillProfile profile,
+    VocalTrainingPlan? plan,
+  }) async {
+    final active = _classSession;
+    if (active == null) {
+      return;
+    }
+    final key = profile.studentId.trim().isEmpty
+        ? profile.studentName.trim().toLowerCase()
+        : profile.studentId.trim();
+    if (key.isEmpty) {
+      return;
+    }
+    active.vocalProfilesByStudentId[key] = profile;
+    if (plan != null) {
+      active.vocalPlansByStudentId[key] = plan;
+    }
+    _logClassEvent(<String, dynamic>{
+      'type': 'VOCAL_COACH_PROFILE',
+      'studentId': profile.studentId,
+      'studentName': profile.studentName,
+      'focusAreas': profile.focusAreas.map((entry) => entry.id).toList(),
+      'timestamp': profile.timestamp.toIso8601String(),
+      'lowConfidence': profile.lowConfidence,
+    });
+    await _persistCurrentClassSession();
+    _broadcastStateAndNotify();
+  }
+
+  Future<void> saveVocalCoachProgress(VocalSessionProgress progress) async {
+    final active = _classSession;
+    if (active == null) {
+      return;
+    }
+    active.vocalProgressLog.add(progress);
+    if (active.vocalProgressLog.length > 5000) {
+      active.vocalProgressLog.removeRange(0, active.vocalProgressLog.length - 5000);
+    }
+    _logClassEvent(<String, dynamic>{
+      'type': 'VOCAL_COACH_PROGRESS',
+      'studentId': progress.studentId,
+      'studentName': progress.studentName,
+      'microCheckScore': progress.microCheckScore,
+      'timestamp': progress.timestamp.toIso8601String(),
+    });
+    await _persistCurrentClassSession();
+    _broadcastStateAndNotify();
   }
 
   Future<void> updateStationConfig({
@@ -939,6 +1056,10 @@ class RehearsalController extends ChangeNotifier {
       case 'CHECKIN_ATTEMPT':
       case 'CHECKIN_RESULT':
         return _handleCheckInResult(command);
+      case 'VOCAL_COACH_PROFILE':
+        return _handleVocalCoachProfile(command);
+      case 'VOCAL_COACH_PROGRESS':
+        return _handleVocalCoachProgress(command);
       default:
         return const CommandExecutionResult(
           applied: false,
@@ -1685,6 +1806,89 @@ class RehearsalController extends ChangeNotifier {
     unawaited(_persistCurrentClassSession());
     _broadcastStateAndNotify();
     return const CommandExecutionResult(applied: true, message: 'Check-in result recorded');
+  }
+
+  CommandExecutionResult _handleVocalCoachProfile(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(applied: false, message: 'No active class session');
+    }
+    final sessionId = command['sessionId']?.toString() ?? '';
+    if (sessionId.isNotEmpty && sessionId != active.sessionId) {
+      return const CommandExecutionResult(applied: false, message: 'Session mismatch');
+    }
+    final profileRaw = command['profile'];
+    if (profileRaw is! Map) {
+      return const CommandExecutionResult(applied: false, message: 'Malformed profile payload');
+    }
+    final profile = VocalSkillProfile.fromMap(profileRaw.cast<String, dynamic>());
+    final key = profile.studentId.trim().isEmpty
+        ? profile.studentName.trim().toLowerCase()
+        : profile.studentId.trim();
+    if (key.isEmpty) {
+      return const CommandExecutionResult(applied: false, message: 'Missing student id');
+    }
+    active.vocalProfilesByStudentId[key] = profile;
+    final planRaw = command['plan'];
+    if (planRaw is Map) {
+      active.vocalPlansByStudentId[key] = VocalTrainingPlan.fromMap(
+        planRaw.cast<String, dynamic>(),
+      );
+    }
+    _logClassEvent(<String, dynamic>{
+      'type': 'VOCAL_COACH_PROFILE',
+      'studentId': profile.studentId,
+      'studentName': profile.studentName,
+      'focusAreas': profile.focusAreas.map((entry) => entry.id).toList(),
+      'timestamp': profile.timestamp.toIso8601String(),
+      'lowConfidence': profile.lowConfidence,
+    });
+    unawaited(_persistCurrentClassSession());
+    _broadcastStateAndNotify();
+    return const CommandExecutionResult(applied: true, message: 'Vocal coach profile recorded');
+  }
+
+  CommandExecutionResult _handleVocalCoachProgress(Map<String, dynamic> command) {
+    final active = _classSession;
+    if (active == null) {
+      return const CommandExecutionResult(applied: false, message: 'No active class session');
+    }
+    final sessionId = command['sessionId']?.toString() ?? '';
+    if (sessionId.isNotEmpty && sessionId != active.sessionId) {
+      return const CommandExecutionResult(applied: false, message: 'Session mismatch');
+    }
+    final progressRaw = command['progress'];
+    if (progressRaw is! Map) {
+      return const CommandExecutionResult(applied: false, message: 'Malformed progress payload');
+    }
+    final progress = VocalSessionProgress.fromMap(progressRaw.cast<String, dynamic>());
+    active.vocalProgressLog.add(progress);
+    if (active.vocalProgressLog.length > 5000) {
+      active.vocalProgressLog.removeRange(0, active.vocalProgressLog.length - 5000);
+    }
+    _logClassEvent(<String, dynamic>{
+      'type': 'VOCAL_COACH_PROGRESS',
+      'studentId': progress.studentId,
+      'studentName': progress.studentName,
+      'microCheckScore': progress.microCheckScore,
+      'timestamp': progress.timestamp.toIso8601String(),
+    });
+    unawaited(_persistCurrentClassSession());
+    _broadcastStateAndNotify();
+    return const CommandExecutionResult(applied: true, message: 'Vocal coach progress recorded');
+  }
+
+  VocalSessionProgress? _latestVocalProgress(
+    ClassSessionState session, {
+    required String studentId,
+  }) {
+    for (var i = session.vocalProgressLog.length - 1; i >= 0; i--) {
+      final entry = session.vocalProgressLog[i];
+      if (entry.studentId == studentId) {
+        return entry;
+      }
+    }
+    return null;
   }
 
   Future<void> _persistCurrentClassSession() async {

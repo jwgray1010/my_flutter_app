@@ -1,4 +1,5 @@
 import 'models.dart';
+import 'vocal_coach_models.dart';
 
 enum CheckInTier {
   partWithMe,
@@ -875,6 +876,9 @@ class ClassSessionState {
     Map<String, StudentCheckInProgress>? checkInProgressByStudentKey,
     List<StationCheckInRecord>? checkInRecords,
     Map<String, int>? checkInTroubleByStationMeasure,
+    Map<String, VocalSkillProfile>? vocalProfilesByStudentId,
+    Map<String, VocalTrainingPlan>? vocalPlansByStudentId,
+    List<VocalSessionProgress>? vocalProgressLog,
   }) : directorGate = directorGate ?? const DirectorGateSettings(),
        practiceSessions = practiceSessions ?? <PracticeSessionPreset>[],
        rosterByDeviceId = rosterByDeviceId ?? <String, StudentPracticeRecord>{},
@@ -888,7 +892,12 @@ class ClassSessionState {
            checkInProgressByStudentKey ?? <String, StudentCheckInProgress>{},
        checkInRecords = checkInRecords ?? <StationCheckInRecord>[],
        checkInTroubleByStationMeasure =
-           checkInTroubleByStationMeasure ?? <String, int>{};
+           checkInTroubleByStationMeasure ?? <String, int>{},
+       vocalProfilesByStudentId =
+           vocalProfilesByStudentId ?? <String, VocalSkillProfile>{},
+       vocalPlansByStudentId =
+           vocalPlansByStudentId ?? <String, VocalTrainingPlan>{},
+       vocalProgressLog = vocalProgressLog ?? <VocalSessionProgress>[];
 
   final String sessionId;
   final String className;
@@ -907,6 +916,9 @@ class ClassSessionState {
   final Map<String, StudentCheckInProgress> checkInProgressByStudentKey;
   final List<StationCheckInRecord> checkInRecords;
   final Map<String, int> checkInTroubleByStationMeasure;
+  final Map<String, VocalSkillProfile> vocalProfilesByStudentId;
+  final Map<String, VocalTrainingPlan> vocalPlansByStudentId;
+  final List<VocalSessionProgress> vocalProgressLog;
 
   List<StationConfig> sortedStations() {
     final list = stationsById.values.toList();
@@ -943,6 +955,13 @@ class ClassSessionState {
       ),
       'checkInRecords': checkInRecords.map((entry) => entry.toMap()).toList(),
       'checkInTroubleByStationMeasure': checkInTroubleByStationMeasure,
+      'vocalProfilesByStudentId': vocalProfilesByStudentId.map(
+        (key, value) => MapEntry<String, dynamic>(key, value.toMap()),
+      ),
+      'vocalPlansByStudentId': vocalPlansByStudentId.map(
+        (key, value) => MapEntry<String, dynamic>(key, value.toMap()),
+      ),
+      'vocalProgressLog': vocalProgressLog.map((entry) => entry.toMap()).toList(),
     };
   }
 
@@ -965,6 +984,12 @@ class ClassSessionState {
           .map((entry) => entry.toMap())
           .toList(),
       'checkInTroubleByStationMeasure': checkInTroubleByStationMeasure,
+      'vocalCoachProfiles':
+          vocalProfilesByStudentId.values.map((entry) => entry.toMap()).toList(),
+      'vocalCoachPlans':
+          vocalPlansByStudentId.values.map((entry) => entry.toMap()).toList(),
+      'vocalCoachProgress': vocalProgressLog.map((entry) => entry.toMap()).toList(),
+      'vocalCoachSectionWeakness': _buildVocalCoachWeaknessMap(),
     };
   }
 
@@ -982,6 +1007,16 @@ class ClassSessionState {
     return summary;
   }
 
+  Map<String, int> _buildVocalCoachWeaknessMap() {
+    final counts = <String, int>{};
+    for (final profile in vocalProfilesByStudentId.values) {
+      for (final area in profile.focusAreas) {
+        counts.update(area.id, (value) => value + 1, ifAbsent: () => 1);
+      }
+    }
+    return counts;
+  }
+
   factory ClassSessionState.fromMap(Map<String, dynamic> map) {
     final practiceRaw = map['practiceSessions'];
     final rosterRaw = map['rosterByDeviceId'];
@@ -994,6 +1029,9 @@ class ClassSessionState {
     final checkInProgressRaw = map['checkInProgressByStudentKey'];
     final checkInRecordsRaw = map['checkInRecords'];
     final checkInTroubleRaw = map['checkInTroubleByStationMeasure'];
+    final vocalProfilesRaw = map['vocalProfilesByStudentId'];
+    final vocalPlansRaw = map['vocalPlansByStudentId'];
+    final vocalProgressRaw = map['vocalProgressLog'];
     final directorGateRaw = map['directorGate'];
 
     final practiceSessions = <PracticeSessionPreset>[];
@@ -1116,6 +1154,41 @@ class ClassSessionState {
       }
     }
 
+    final vocalProfilesByStudentId = <String, VocalSkillProfile>{};
+    if (vocalProfilesRaw is Map) {
+      for (final entry in vocalProfilesRaw.entries) {
+        final value = entry.value;
+        if (value is Map) {
+          vocalProfilesByStudentId[entry.key.toString()] = VocalSkillProfile.fromMap(
+            value.cast<String, dynamic>(),
+          );
+        }
+      }
+    }
+
+    final vocalPlansByStudentId = <String, VocalTrainingPlan>{};
+    if (vocalPlansRaw is Map) {
+      for (final entry in vocalPlansRaw.entries) {
+        final value = entry.value;
+        if (value is Map) {
+          vocalPlansByStudentId[entry.key.toString()] = VocalTrainingPlan.fromMap(
+            value.cast<String, dynamic>(),
+          );
+        }
+      }
+    }
+
+    final vocalProgressLog = <VocalSessionProgress>[];
+    if (vocalProgressRaw is List) {
+      for (final entry in vocalProgressRaw) {
+        if (entry is Map) {
+          vocalProgressLog.add(
+            VocalSessionProgress.fromMap(entry.cast<String, dynamic>()),
+          );
+        }
+      }
+    }
+
     return ClassSessionState(
       sessionId: map['sessionId']?.toString() ?? '',
       className: map['className']?.toString() ?? '',
@@ -1137,6 +1210,9 @@ class ClassSessionState {
       checkInProgressByStudentKey: checkInProgressByStudentKey,
       checkInRecords: checkInRecords,
       checkInTroubleByStationMeasure: checkInTroubleByStationMeasure,
+      vocalProfilesByStudentId: vocalProfilesByStudentId,
+      vocalPlansByStudentId: vocalPlansByStudentId,
+      vocalProgressLog: vocalProgressLog,
     );
   }
 }

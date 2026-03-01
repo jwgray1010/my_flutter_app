@@ -382,6 +382,8 @@ class LocalPlayerServer {
         type == 'PRACTICE_COMPLETED' ||
         type == 'CHECKIN_ATTEMPT' ||
         type == 'CHECKIN_RESULT' ||
+        type == 'VOCAL_COACH_PROFILE' ||
+        type == 'VOCAL_COACH_PROGRESS' ||
         type == 'JOIN_CLASS_SESSION' ||
         type == 'START_PRACTICE_SESSION' ||
         type == 'PRACTICE_EVENT' ||
