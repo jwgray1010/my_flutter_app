@@ -9,6 +9,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'checkin_assessment.dart';
 import 'class_session_models.dart';
 import 'networking.dart';
+import 'vocal_coach_flow.dart';
 
 class RokuRemoteScreen extends StatelessWidget {
   const RokuRemoteScreen({super.key});
@@ -460,6 +461,7 @@ class _StationModeScreenState extends State<StationModeScreen> {
                               recentNames: _recentNames,
                               onStart: (name) => _startStudentAttempt(station, name),
                               onCheckIn: () => _openCheckIn(station),
+                              onVocalCoach: () => _openVocalCoach(station),
                               checkInLabel: gateConfig.enabled
                                   ? 'START CHECK-IN'
                                   : 'CHECK-IN',
@@ -648,6 +650,61 @@ class _StationModeScreenState extends State<StationModeScreen> {
     }
   }
 
+  Future<void> _openVocalCoach(StationModeConfig station) async {
+    if (!station.isValid) {
+      return;
+    }
+    String? name = _gateStudentName;
+    if (name == null || name.trim().isEmpty) {
+      name = await _promptStudentName();
+    }
+    if (!mounted || name == null || name.trim().isEmpty) {
+      return;
+    }
+    final trimmedName = name.trim();
+    _recentNames.remove(trimmedName);
+    _recentNames.insert(0, trimmedName);
+    if (_recentNames.length > 6) {
+      _recentNames.removeLast();
+    }
+    final studentId = _stationStudentId(station.stationId, trimmedName);
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => VocalCoachScreen(
+          studentId: studentId,
+          studentName: trimmedName,
+          sessionId: station.sessionId,
+          stationId: station.stationId,
+          partId: station.lockedPart,
+          onSaveProfile: (profile, plan) async {
+            _client.sendCommandEnvelope(
+              'VOCAL_COACH_PROFILE',
+              args: <String, dynamic>{
+                'sessionId': station.sessionId,
+                'stationId': station.stationId,
+                'profile': profile.toMap(),
+                'plan': plan.toMap(),
+              },
+            );
+          },
+          onSaveProgress: (progress) async {
+            _client.sendCommandEnvelope(
+              'VOCAL_COACH_PROGRESS',
+              args: <String, dynamic>{
+                'sessionId': station.sessionId,
+                'stationId': station.stationId,
+                'progress': progress.toMap(),
+              },
+            );
+          },
+        ),
+      ),
+    );
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   Future<String?> _promptStudentName() async {
     final controller = TextEditingController();
     return showDialog<String>(
@@ -718,6 +775,19 @@ class _StationModeScreenState extends State<StationModeScreen> {
       );
     }
     return false;
+  }
+
+  String _stationStudentId(String stationId, String studentName) {
+    final normalized = studentName
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    if (normalized.isEmpty) {
+      return '${stationId}_student';
+    }
+    return '${stationId}_$normalized';
   }
 
   _DirectorGateRemoteConfig _directorGateForStation(StationModeConfig station) {
@@ -1884,12 +1954,14 @@ class _StationHomePanel extends StatelessWidget {
     required this.recentNames,
     required this.onStart,
     required this.onCheckIn,
+    required this.onVocalCoach,
     this.checkInLabel = 'CHECK-IN',
   });
 
   final List<String> recentNames;
   final void Function(String name) onStart;
   final VoidCallback onCheckIn;
+  final VoidCallback onVocalCoach;
   final String checkInLabel;
 
   @override
@@ -1914,6 +1986,12 @@ class _StationHomePanel extends StatelessWidget {
             label: checkInLabel,
             height: 88,
             onPressed: onCheckIn,
+          ),
+          const SizedBox(height: 12),
+          _RokuButton(
+            label: 'VOCAL COACH',
+            height: 78,
+            onPressed: onVocalCoach,
           ),
           if (recentNames.isNotEmpty) ...[
             const SizedBox(height: 14),

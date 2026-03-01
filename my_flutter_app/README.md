@@ -262,3 +262,73 @@ Warmups now has a dedicated flow on the Player side:
 - Auto-transpose up, then down through selected range preset
 - Texture changes apply on next iteration
 - Tempo changes apply in real time
+
+## Vocal Development Coach (In-School, On-Device)
+
+The app now includes an **Individual Vocal Development Coach** that runs fully on-device and integrates with Station Mode + Warmup workflows.
+
+### Modes
+
+- **Mode A: Quick Skill Check**
+  - 3-5 minute screen
+  - Returns 1-2 focus areas
+  - Suggests 2 exercises
+- **Mode B: Full Pre-Assessment**
+  - 5-7 minute screening
+  - Builds skill profile
+  - Generates a 2-week rule-based plan
+
+### Pre-assessment tasks
+
+1. Pitch match (5 notes)
+2. 5-tone scale
+3. Arpeggio 1-3-5-8-5-3-1
+4. Sustain 6 seconds
+5. Rhythm alignment to click
+
+Each task outputs:
+
+- `pitchAccuracy` (0-100)
+- `stabilityScore` (0-100)
+- `onsetTimingScore` (0-100)
+- `confidenceScore` (0-100)
+
+If confidence is low, coach shows guidance (`Low confidence - move closer`) and does not finalize profile.
+
+### Focus areas and plan mapping
+
+Coach produces up to 3 focus areas:
+
+- `pitch_stability`
+- `sustain_control`
+- `head_voice_coordination`
+- `leap_accuracy`
+- `rhythm_alignment`
+- `onset_clarity`
+
+For each focus area, the rule engine maps to:
+
+- 3 tagged warmups (from warmup library)
+- 1 drill
+- frequency recommendation (3-4x/week)
+- session length (5-8 minutes)
+
+### Session flow
+
+After profile:
+
+1. Show Today's Focus
+2. Run 2 warmups
+3. Run 1 drill
+4. Run micro-check
+5. Save progress
+
+### Teacher View additions
+
+Teacher dashboard now includes:
+
+- Student focus areas
+- Baseline vs latest micro-check improvement
+- Section aggregate weaknesses by focus area
+
+No raw audio is stored; only metrics and flags are persisted.

@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import 'class_session_models.dart';
 import 'models.dart';
 import 'rehearsal_controller.dart';
+import 'vocal_coach_models.dart';
 
 class TeacherViewScreen extends StatefulWidget {
   const TeacherViewScreen({
@@ -446,6 +447,8 @@ class _StationTeacherDashboard extends StatelessWidget {
     };
     final checkInRows = controller.checkInProgressRows();
     final clearanceCounts = controller.clearanceCounts();
+    final vocalCoachRows = controller.vocalCoachRows();
+    final vocalWeakness = controller.vocalCoachSectionWeakness();
     final filteredCheckInRows = showNotClearedOnly
         ? checkInRows
             .where((row) => row.clearanceStatus != StudentClearanceStatus.cleared)
@@ -712,6 +715,84 @@ class _StationTeacherDashboard extends StatelessWidget {
                     .toList(),
               ),
             ),
+          const SizedBox(height: 14),
+          const Text(
+            'Vocal Development Coach',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Section Aggregate Weaknesses',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  if (vocalWeakness.isEmpty)
+                    const Text('No profiles yet.')
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _sortedWeaknessEntries(vocalWeakness)
+                          .map(
+                            (entry) => Chip(
+                              label: Text('${entry.key.title}: ${entry.value}'),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (vocalCoachRows.isEmpty)
+            const Text('No vocal coach profiles recorded yet.')
+          else
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Student')),
+                  DataColumn(label: Text('Station')),
+                  DataColumn(label: Text('Focus Areas')),
+                  DataColumn(label: Text('Baseline')),
+                  DataColumn(label: Text('Latest Micro-Check')),
+                  DataColumn(label: Text('Improvement')),
+                  DataColumn(label: Text('Updated')),
+                ],
+                rows: vocalCoachRows
+                    .map(
+                      (row) => DataRow(
+                        cells: [
+                          DataCell(Text(row.studentName)),
+                          DataCell(Text(row.stationId == null || row.stationId!.isEmpty
+                              ? '-'
+                              : (stationNameById[row.stationId!] ?? row.stationId!))),
+                          DataCell(
+                            Text(
+                              row.focusAreas.isEmpty
+                                  ? '-'
+                                  : row.focusAreas
+                                        .map((entry) => entry.title)
+                                        .join(', '),
+                            ),
+                          ),
+                          DataCell(Text('${row.baselineScore}')),
+                          DataCell(Text(row.latestMicroCheckScore?.toString() ?? '-')),
+                          DataCell(Text(_improvementLabel(row.improvementDelta))),
+                          DataCell(Text(row.lastUpdatedAt.toIso8601String())),
+                        ],
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
         ],
       ),
     );
@@ -742,5 +823,23 @@ String _clearanceLabel(StudentClearanceStatus status) {
     case StudentClearanceStatus.notCleared:
       return 'NOT CLEARED';
   }
+}
+
+List<MapEntry<VocalFocusArea, int>> _sortedWeaknessEntries(
+  Map<VocalFocusArea, int> counts,
+) {
+  final entries = counts.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  return entries;
+}
+
+String _improvementLabel(int? delta) {
+  if (delta == null) {
+    return '-';
+  }
+  if (delta > 0) {
+    return '+$delta';
+  }
+  return '$delta';
 }
 

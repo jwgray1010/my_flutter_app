@@ -14,7 +14,11 @@ import 'teacher_view_screen.dart';
 import 'voice_commands.dart';
 import 'voice_help_screen.dart';
 import 'voice_ptt_service.dart';
+import 'vocal_coach_flow.dart';
+import 'warmup_session_controller.dart';
 import 'warmups_flow.dart';
+import 'warmups_library.dart';
+import 'warmups_models.dart';
 
 class ChoirRehearsalApp extends StatelessWidget {
   const ChoirRehearsalApp({super.key});
@@ -393,6 +397,11 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                       icon: const Icon(Icons.assessment),
                       label: const Text('Teacher View'),
                     ),
+                    ElevatedButton.icon(
+                      onPressed: _openVocalCoach,
+                      icon: const Icon(Icons.graphic_eq),
+                      label: const Text('Vocal Coach'),
+                    ),
                     Text(
                       _controller.loadedFileName ?? 'No score loaded',
                       style: const TextStyle(fontSize: 18),
@@ -670,6 +679,106 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
         builder: (_) => TeacherViewScreen(controller: _controller),
       ),
     );
+  }
+
+  Future<void> _openVocalCoach() async {
+    final studentName = await _promptStudentNameForCoach();
+    if (!mounted || studentName == null || studentName.trim().isEmpty) {
+      return;
+    }
+    final trimmedName = studentName.trim();
+    final studentId = _normalizedStudentId(trimmedName);
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => VocalCoachScreen(
+          studentId: studentId,
+          studentName: trimmedName,
+          sessionId: _controller.classSession?.sessionId,
+          onSaveProfile: (profile, plan) {
+            return _controller.saveVocalCoachProfile(
+              profile: profile,
+              plan: plan,
+            );
+          },
+          onSaveProgress: _controller.saveVocalCoachProgress,
+          onRunWarmup: _openWarmupById,
+        ),
+      ),
+    );
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<String?> _promptStudentNameForCoach() {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Vocal Coach Student'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'Student name',
+              hintText: 'First + last initial',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+              child: const Text('Start'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _normalizedStudentId(String studentName) {
+    final normalized = studentName
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    return normalized.isEmpty ? 'student_unknown' : normalized;
+  }
+
+  Future<void> _openWarmupById(String warmupId) async {
+    final library = WarmupsLibrary.buildAll();
+    Warmup? selected;
+    for (final warmup in library) {
+      if (warmup.id == warmupId) {
+        selected = warmup;
+        break;
+      }
+    }
+    if (selected == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Warmup not found: $warmupId')),
+        );
+      }
+      return;
+    }
+    final controller = WarmupSessionController(library: library);
+    await controller.initializeAudio();
+    controller.selectWarmup(selected);
+    if (!mounted) {
+      controller.dispose();
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WarmupPlayerScreen(controller: controller),
+      ),
+    );
+    controller.dispose();
   }
 
   double get _minimumConfidence => _choirRoomMode ? 0.62 : 0.35;
