@@ -139,3 +139,50 @@ Station Mode replaces the broader student-session flow with a simpler in-school 
 - `PRACTICE_EVENT`
 - `PRACTICE_SUMMARY`
 - `PRACTICE_COMPLETED`
+
+## Warmups Library (iPad Player)
+
+Warmups now has a dedicated flow on the Player side:
+
+1. Player Home -> **Warmups**
+2. Choose **Category**
+3. Choose **Level** (Middle / Lower HS / Upper HS)
+4. Choose warmup
+5. Run in **Warmup Player**
+
+### Included library structure
+
+- 12 categories:
+  1. Vowels & Resonance
+  2. Diction & Articulation
+  3. Head Voice & Registration
+  4. Breath & Support
+  5. Placement & Forward Tone
+  6. Blend & Unison
+  7. Intonation & Tuning (Drone)
+  8. Agility & Flexibility
+  9. Legato Line
+  10. Staccato Precision
+  11. Dynamic Control
+  12. Range Builder
+- 6 warmup families per category
+- 3 difficulty levels per family (MS/LHS/UHS)
+
+### Warmup Player controls
+
+- Play / Pause
+- Tempo - / +
+- Demo On / Off
+- Demo voice: Treble / Boy
+- Texture: Unison / 2-Part / SAB / SATB
+- Step mode: 1/2 or Whole
+- Range preset selector
+- Repeats per key (1-3)
+
+### Playback behavior
+
+- Piano playback for generated texture voices
+- Algorithmic harmony generation from scale degrees
+- Auto-transpose up, then down through selected range preset
+- Texture changes apply on next iteration
+- Tempo changes apply in real time

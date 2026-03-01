@@ -14,6 +14,7 @@ import 'teacher_view_screen.dart';
 import 'voice_commands.dart';
 import 'voice_help_screen.dart';
 import 'voice_ptt_service.dart';
+import 'warmups_flow.dart';
 
 class ChoirRehearsalApp extends StatelessWidget {
   const ChoirRehearsalApp({super.key});
@@ -90,7 +91,7 @@ class RoleSelectionScreen extends StatelessWidget {
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) => const MainPlayerScreen(),
+                            builder: (_) => const PlayerHomeScreen(),
                           ),
                         );
                       },
@@ -161,6 +162,82 @@ class _RoleCard extends StatelessWidget {
                 Text(
                   subtitle,
                   style: const TextStyle(fontSize: 16, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class PlayerHomeScreen extends StatelessWidget {
+  const PlayerHomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF15181D),
+      appBar: AppBar(
+        title: const Text('Player Home'),
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Choose Mode',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  height: 112,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF6E5BFF),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const MainPlayerScreen(),
+                        ),
+                      );
+                    },
+                    child: const Text('Rehearsal'),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  height: 112,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1E232B),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const WarmupCategoryScreen(),
+                        ),
+                      );
+                    },
+                    child: const Text('Warmups'),
+                  ),
                 ),
               ],
             ),
