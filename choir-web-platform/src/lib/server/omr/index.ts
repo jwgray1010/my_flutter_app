@@ -1,7 +1,7 @@
-import type { OMRProvider } from "@/lib/server/omr/provider";
-import { HomrOcrProvider } from "@/lib/server/omr/homr-provider";
+import type { OMRService } from "@/lib/server/omr/provider";
+import { AudiverisOMRService } from "@/lib/server/omr/audiveris-provider";
 
-export function buildOcrProvider(): OMRProvider {
-  return new HomrOcrProvider();
+export function buildOcrService(): OMRService {
+  return new AudiverisOMRService();
 }
 

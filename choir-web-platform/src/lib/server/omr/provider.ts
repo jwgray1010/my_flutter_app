@@ -1,18 +1,26 @@
 import type { OMRDiagnostics } from "@/lib/score-types";
 
-export interface OMRInput {
-  filePath: string;
-  mimeType: string;
-  originalFileName: string;
+export interface OMRProcessOptions {
+  outputDir: string;
+  pageNumbers?: number[];
+}
+
+export interface OMRArtifacts {
+  audiverisOmrPath: string | null;
+  audiverisMxlPath: string | null;
+  audiverisMusicXmlPath: string | null;
 }
 
 export interface OMRResult {
   musicXml: string;
   diagnostics: OMRDiagnostics;
   provider: string;
+  warnings: string[];
+  artifacts: OMRArtifacts;
+  recognitionLog: string;
 }
 
-export interface OMRProvider {
-  recognize(input: OMRInput, diagnostics: OMRDiagnostics): Promise<OMRResult>;
+export interface OMRService {
+  processScore(inputFiles: string[], options: OMRProcessOptions): Promise<OMRResult>;
 }
 

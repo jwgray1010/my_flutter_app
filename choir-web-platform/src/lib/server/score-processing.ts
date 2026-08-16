@@ -2,8 +2,9 @@ import { JSDOM } from "jsdom";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { parseMusicXmlToScore } from "@/lib/musicxml";
+import type { OMRArtifacts } from "@/lib/server/omr/provider";
 import type { OMRDiagnostics, ParsedScore } from "@/lib/score-types";
-import { buildOcrProvider } from "@/lib/server/omr";
+import { buildOcrService } from "@/lib/server/omr";
 import { analyzeImageQuality } from "@/lib/server/quality";
 
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/jpg", "image/webp"]);
@@ -12,6 +13,8 @@ type ProcessFileInput = {
   filePath: string;
   originalFileName: string;
   mimeType: string;
+  audiverisOutputDir: string;
+  pageNumbers?: number[];
 };
 
 type ProcessFileOutput = {
@@ -19,6 +22,9 @@ type ProcessFileOutput = {
   diagnostics: OMRDiagnostics;
   provider: string;
   parsedScore: ParsedScore;
+  artifacts: OMRArtifacts;
+  warnings: string[];
+  recognitionLog: string;
 };
 
 export async function processFileToParsedScore(
@@ -33,6 +39,13 @@ export async function processFileToParsedScore(
   let musicXml = "";
   let provider = "direct-musicxml";
   let sourceType: ParsedScore["sourceType"] = "musicxml";
+  let artifacts: OMRArtifacts = {
+    audiverisOmrPath: null,
+    audiverisMxlPath: null,
+    audiverisMusicXmlPath: null,
+  };
+  let warnings: string[] = [];
+  let recognitionLog = "";
 
   if (extension === "xml" || extension === "musicxml") {
     musicXml = await fs.readFile(input.filePath, "utf8");
@@ -42,18 +55,22 @@ export async function processFileToParsedScore(
     } else if (extension === "pdf") {
       diagnostics.warnings.push("PDF processing currently reads page 1 first for the prototype.");
     }
-    const omrProvider = buildOcrProvider();
-    const result = await omrProvider.recognize(
-      {
-        filePath: input.filePath,
-        mimeType: input.mimeType,
-        originalFileName: input.originalFileName,
-      },
-      diagnostics
-    );
+    const omrService = buildOcrService();
+    const result = await omrService.processScore([input.filePath], {
+      outputDir: input.audiverisOutputDir,
+      pageNumbers: input.pageNumbers,
+    });
     musicXml = result.musicXml;
-    diagnostics = result.diagnostics;
+    warnings = result.warnings;
+    diagnostics = {
+      ...diagnostics,
+      lowConfidence: diagnostics.lowConfidence || result.diagnostics.lowConfidence || warnings.length > 0,
+      warnings: [...new Set([...diagnostics.warnings, ...result.diagnostics.warnings])],
+      quality: diagnostics.quality,
+    };
     provider = result.provider;
+    artifacts = result.artifacts;
+    recognitionLog = result.recognitionLog;
     sourceType = "omr";
   }
 
@@ -66,6 +83,9 @@ export async function processFileToParsedScore(
       diagnostics,
       provider,
       parsedScore,
+      artifacts,
+      warnings,
+      recognitionLog,
     };
   } finally {
     if (previousDomParser) {

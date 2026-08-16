@@ -10,6 +10,7 @@ import {
   extensionFor,
   processFileToParsedScore,
 } from "@/lib/server/score-processing";
+import { emptyManualCorrections } from "@/lib/score-corrections";
 import type { SavedScoreSummary } from "@/lib/score-types";
 
 export const runtime = "nodejs";
@@ -31,8 +32,12 @@ export async function POST(request: Request) {
   }
 
   const scoreId = randomUUID();
-  const { uploadsDir } = dataStoragePaths();
+  const { uploadsDir, audiverisDir } = dataStoragePaths();
   const sourceFilePath = path.join(/* turbopackIgnore: true */ uploadsDir, `${scoreId}.${extension}`);
+  const audiverisOutputDir = path.join(
+    /* turbopackIgnore: true */ audiverisDir,
+    scoreId
+  );
   const sourceMimeType = file.type || mimeFromExtension(extension);
 
   try {
@@ -44,6 +49,7 @@ export async function POST(request: Request) {
       filePath: sourceFilePath,
       originalFileName: file.name,
       mimeType: sourceMimeType,
+      audiverisOutputDir,
     });
 
     const resolvedTitle =
@@ -61,14 +67,32 @@ export async function POST(request: Request) {
       sourceFileName: file.name,
       sourceMimeType,
       sourceFilePath,
+      sourceFiles: [
+        {
+          fileName: file.name,
+          mimeType: sourceMimeType,
+          filePath: sourceFilePath,
+          pageNumber: null,
+        },
+      ],
       recognizedMusicXml: processed.musicXml,
       parsedScore: {
         ...processed.parsedScore,
         title: resolvedTitle || processed.parsedScore.title,
       },
+      baseParsedScore: {
+        ...processed.parsedScore,
+        title: resolvedTitle || processed.parsedScore.title,
+      },
       recognitionProvider: processed.provider,
       diagnostics: processed.diagnostics,
+      recognitionWarnings: processed.warnings,
+      recognitionLog: processed.recognitionLog,
       directorConfirmedPartAssignments: directorAssignments,
+      manualCorrections: emptyManualCorrections(),
+      audiverisOmrPath: processed.artifacts.audiverisOmrPath,
+      audiverisMxlPath: processed.artifacts.audiverisMxlPath,
+      audiverisMusicXmlPath: processed.artifacts.audiverisMusicXmlPath,
     });
 
     const summary: SavedScoreSummary = {
@@ -80,6 +104,7 @@ export async function POST(request: Request) {
       measureCount: record.measureCount,
       detectedParts: record.detectedParts,
       lastUsedTempoPercent: record.lastUsedTempoPercent,
+      recognitionWarnings: record.recognitionWarnings,
     };
 
     return NextResponse.json({
@@ -88,6 +113,7 @@ export async function POST(request: Request) {
       parsedScore: record.parsedScore,
       diagnostics: processed.diagnostics,
       provider: processed.provider,
+      warnings: processed.warnings,
     });
   } catch (error) {
     const message =

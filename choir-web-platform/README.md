@@ -33,7 +33,7 @@ The same URL serves multiple contexts:
   - `PROCESSING MUSIC...`
   - `READY TO REHEARSE`
 - Server-side OMR provider abstraction (`src/lib/server/omr/provider.ts`)
-- OMR provider implementation using `homr` (`scripts/run_homr.py`)
+- OMR provider implementation using **Audiveris** (`src/lib/server/omr/audiveris-provider.ts`)
 - MusicXML parsing for:
   - Parts (with SATB/Piano canonical mapping)
   - Measures and time signatures
@@ -51,6 +51,13 @@ The same URL serves multiple contexts:
   - Auto-save after successful OMR/parse (`✓ Saved to My Music`)
   - Rehearse from saved data without re-running OMR
   - Menu actions: Rename, Reprocess, Replace Pages, Delete
+- Recognition review + correction flow:
+  - Ready to Rehearse review screen (detected parts + measure range + warnings)
+  - Check Score / Fix Score screen
+  - Part assignment correction
+  - Measure number anchor correction
+  - Boundary issue flagging for reprocess workflow
+  - Measure-level note/rhythm correction with audible play-this-measure loop
 
 ## Persistent My Music data model
 
@@ -83,7 +90,19 @@ npm install
 Install Python runtime dependencies for OMR:
 
 ```bash
-python3 -m pip install --user homr pypdfium2 Pillow
+python3 -m pip install --user pypdfium2 Pillow
+```
+
+Install Audiveris (Ubuntu 24.04 example):
+
+```bash
+sudo apt install /path/to/Audiveris-<version>-ubuntu24.04-x86_64.deb
+```
+
+If Audiveris is not at the default install path, set:
+
+```bash
+export AUDIVERIS_BIN=/custom/path/to/Audiveris
 ```
 
 Run the app:
@@ -105,9 +124,10 @@ http://192.168.x.x:3000
 - Provider is intentionally replaceable so Audiveris/other engines can be swapped later.
 - Current pipeline:
   - upload image/pdf
-  - preprocess image
-  - run `homr`
-  - read produced MusicXML
+  - image diagnostics
+  - run `Audiveris` in batch mode
+  - keep `.omr` and `.mxl` artifacts
+  - extract MusicXML
   - parse + auto-save + play
 - PDF currently processes page 1 first in this prototype.
 

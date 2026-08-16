@@ -6,6 +6,7 @@ import {
   getSavedScoreById,
   persistSavedScore,
 } from "@/lib/server/my-music-db";
+import { applyManualCorrections, normalizeManualCorrections } from "@/lib/score-corrections";
 import {
   extensionFor,
   processFileToParsedScore,
@@ -38,7 +39,11 @@ export async function POST(
     );
   }
 
-  const { uploadsDir } = dataStoragePaths();
+  const pageNumberValue = formData.get("pageNumber");
+  const pageNumber = Number(pageNumberValue);
+  const selectedPageNumber = Number.isFinite(pageNumber) && pageNumber > 0 ? Math.round(pageNumber) : undefined;
+
+  const { uploadsDir, audiverisDir } = dataStoragePaths();
   const replacementPath = path.join(/* turbopackIgnore: true */ uploadsDir, `${id}.${extension}`);
   const oldSourcePath = existing.sourceFilePath;
   const replacementMimeType = file.type || existing.sourceMimeType;
@@ -52,10 +57,20 @@ export async function POST(
       filePath: replacementPath,
       originalFileName: file.name,
       mimeType: replacementMimeType,
+      audiverisOutputDir: path.join(/* turbopackIgnore: true */ audiverisDir, id),
+      pageNumbers:
+        selectedPageNumber && replacementMimeType.toLowerCase().includes("pdf")
+          ? [selectedPageNumber]
+          : undefined,
     });
 
+    const preservedCorrections = normalizeManualCorrections(existing.manualCorrections);
+    const correctedScore = applyManualCorrections(processed.parsedScore, preservedCorrections);
     const directorAssignments = Object.fromEntries(
-      processed.parsedScore.parts.map((part) => [part.id, part.canonicalPart])
+      correctedScore.parts.map((part) => [
+        part.id,
+        existing.directorConfirmedPartAssignments[part.id] ?? part.canonicalPart,
+      ])
     );
 
     const record = persistSavedScore({
@@ -64,14 +79,33 @@ export async function POST(
       sourceFileName: file.name,
       sourceMimeType: replacementMimeType,
       sourceFilePath: replacementPath,
+      sourceFiles: [
+        {
+          fileName: file.name,
+          mimeType: replacementMimeType,
+          filePath: replacementPath,
+          pageNumber: selectedPageNumber ?? null,
+        },
+      ],
       recognizedMusicXml: processed.musicXml,
       parsedScore: {
+        ...correctedScore,
+        title: existing.title,
+      },
+      baseParsedScore: {
         ...processed.parsedScore,
         title: existing.title,
       },
       recognitionProvider: processed.provider,
       diagnostics: processed.diagnostics,
+      recognitionWarnings: processed.warnings,
+      recognitionLog: processed.recognitionLog,
       directorConfirmedPartAssignments: directorAssignments,
+      manualCorrections: preservedCorrections,
+      audiverisOmrPath: processed.artifacts.audiverisOmrPath,
+      audiverisMxlPath: processed.artifacts.audiverisMxlPath,
+      audiverisMusicXmlPath: processed.artifacts.audiverisMusicXmlPath,
+      lastUsedTempoPercent: existing.lastUsedTempoPercent,
     });
 
     if (oldSourcePath !== replacementPath) {
@@ -79,7 +113,9 @@ export async function POST(
     }
 
     return NextResponse.json({
-      message: "Pages replaced and score reprocessed.",
+      message: selectedPageNumber
+        ? `Page ${selectedPageNumber} replaced and reprocessed.`
+        : "Pages replaced and reprocessed.",
       item: record,
     });
   } catch (error) {

@@ -6,6 +6,8 @@ export type CanonicalPartId =
   | "PIANO"
   | "UNKNOWN";
 
+export type AssignablePartId = CanonicalPartId | "IGNORE";
+
 export interface RecognizedPart {
   id: string;
   sourceName: string;
@@ -55,6 +57,46 @@ export interface OMRDiagnostics {
   };
 }
 
+export interface SourceFileReference {
+  fileName: string;
+  mimeType: string;
+  filePath: string;
+  pageNumber?: number | null;
+}
+
+export interface MeasurePartEditEvent {
+  id: string;
+  kind: "NOTE" | "REST";
+  midi: number | null;
+  durationBeats: number;
+}
+
+export interface MeasureBoundaryFlag {
+  measureInternalIndex: number;
+  measureDisplayNumber: number;
+  note: string;
+  createdAt: string;
+}
+
+export interface MeasureNumberAnchorCorrection {
+  internalIndex: number;
+  displayNumber: number;
+}
+
+export interface MeasurePartEditCorrection {
+  partId: string;
+  measureInternalIndex: number;
+  events: MeasurePartEditEvent[];
+  updatedAt: string;
+}
+
+export interface ManualScoreCorrections {
+  partAssignments: Record<string, AssignablePartId>;
+  measureNumberAnchor: MeasureNumberAnchorCorrection | null;
+  boundaryFlags: MeasureBoundaryFlag[];
+  measurePartEdits: MeasurePartEditCorrection[];
+}
+
 export interface SavedScoreSummary {
   id: string;
   title: string;
@@ -64,16 +106,24 @@ export interface SavedScoreSummary {
   measureCount: number;
   detectedParts: CanonicalPartId[];
   lastUsedTempoPercent: number;
+  recognitionWarnings: string[];
 }
 
 export interface SavedScoreRecord extends SavedScoreSummary {
   sourceFilePath: string;
   sourceMimeType: string;
+  sourceFiles: SourceFileReference[];
+  audiverisOmrPath: string | null;
+  audiverisMxlPath: string | null;
+  audiverisMusicXmlPath: string | null;
   parsedScore: ParsedScore;
+  baseParsedScore: ParsedScore;
   recognizedMusicXml: string;
-  directorConfirmedPartAssignments: Record<string, CanonicalPartId>;
+  directorConfirmedPartAssignments: Record<string, AssignablePartId>;
+  manualCorrections: ManualScoreCorrections;
   recognitionWarnings: string[];
   recognitionQuality: OMRDiagnostics["quality"];
   recognitionProvider: string;
+  recognitionLog: string;
 }
 

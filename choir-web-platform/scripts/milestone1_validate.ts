@@ -1,17 +1,13 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import sharp from "sharp";
-import { JSDOM } from "jsdom";
-import { parseMusicXmlToScore } from "@/lib/musicxml";
+import { processFileToParsedScore } from "@/lib/server/score-processing";
 
 const require = createRequire(import.meta.url);
 const createVerovioModule = require("verovio/wasm").default;
 const { VerovioToolkit } = require("verovio/esm");
-const execFileAsync = promisify(execFile);
 
 const SOURCE_XML_URL =
   "https://raw.githubusercontent.com/MTG/ChoralSynth/main/Dataset/HempCW-JustJudge/score.musicxml";
@@ -20,7 +16,7 @@ async function main() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "milestone1-"));
   const sourceXmlPath = path.join(tempDir, "satb-piano-source.musicxml");
   const photoPath = path.join(tempDir, "satb-piano-photo.jpg");
-  const omrJsonPath = path.join(tempDir, "omr-result.json");
+  const audiverisOutputDir = path.join(tempDir, "audiveris-output");
 
   console.log("Downloading SATB+piano source score...");
   const response = await fetch(SOURCE_XML_URL);
@@ -32,23 +28,14 @@ async function main() {
   console.log("Rendering image to simulate clear photographed page...");
   await renderFirstPageAsPhoto(sourceXmlPath, photoPath);
 
-  console.log("Running real OMR pipeline...");
-  const { stdout } = await execFileAsync("python3", ["scripts/run_homr.py", photoPath], {
-    cwd: process.cwd(),
-    maxBuffer: 12 * 1024 * 1024,
+  console.log("Running real Audiveris OMR pipeline...");
+  const processed = await processFileToParsedScore({
+    filePath: photoPath,
+    originalFileName: "satb-piano-photo.jpg",
+    mimeType: "image/jpeg",
+    audiverisOutputDir,
   });
-  await fs.writeFile(omrJsonPath, stdout, "utf8");
-  const omrPayload = JSON.parse(stdout) as { musicXmlPath?: string; message?: string };
-  if (!omrPayload.musicXmlPath) {
-    throw new Error(omrPayload.message ?? "OMR did not return musicXmlPath.");
-  }
-
-  const recognizedMusicXml = await fs.readFile(omrPayload.musicXmlPath, "utf8");
-  await fs.rm(omrPayload.musicXmlPath, { force: true });
-
-  (globalThis as { DOMParser?: typeof window.DOMParser }).DOMParser =
-    new JSDOM().window.DOMParser;
-  const parsed = parseMusicXmlToScore(recognizedMusicXml, "omr");
+  const parsed = processed.parsedScore;
 
   const presentParts = new Set(parsed.parts.map((part) => part.canonicalPart));
   const noteCountByPart = {

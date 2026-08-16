@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextResponse } from "next/server";
+import { dataStoragePaths } from "@/lib/server/my-music-db";
 import { extensionFor, processFileToParsedScore } from "@/lib/server/score-processing";
 
 export const runtime = "nodejs";
@@ -28,6 +29,11 @@ export async function POST(request: Request) {
     os.tmpdir(),
     `choir-upload-${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`
   );
+  const { audiverisDir } = dataStoragePaths();
+  const transientOutputDir = path.join(
+    /* turbopackIgnore: true */ audiverisDir,
+    `transient-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
 
   try {
     const bytes = Buffer.from(await file.arrayBuffer());
@@ -37,6 +43,7 @@ export async function POST(request: Request) {
       filePath: tempFilePath,
       mimeType: file.type,
       originalFileName: file.name,
+      audiverisOutputDir: transientOutputDir,
     });
 
     return NextResponse.json({
@@ -56,6 +63,7 @@ export async function POST(request: Request) {
     );
   } finally {
     await fs.rm(tempFilePath, { force: true });
+    await fs.rm(transientOutputDir, { recursive: true, force: true });
   }
 }
 
