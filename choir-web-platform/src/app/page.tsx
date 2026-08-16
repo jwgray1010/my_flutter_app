@@ -1,9 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { parseMusicXmlToScore } from "@/lib/musicxml";
 import { ScorePlayer, type PlaybackSnapshot } from "@/lib/score-player";
-import type { CanonicalPartId, OMRDiagnostics, ParsedScore } from "@/lib/score-types";
+import type {
+  CanonicalPartId,
+  OMRDiagnostics,
+  ParsedScore,
+  SavedScoreRecord,
+  SavedScoreSummary,
+} from "@/lib/score-types";
 
 const PART_BUTTONS: CanonicalPartId[] = [
   "SOPRANO",
@@ -32,13 +37,6 @@ type DirectorPanel =
 
 type StudentMode = "station" | "sectional" | "solo" | "checkin" | "vocal";
 
-type SavedMusicItem = {
-  id: string;
-  title: string;
-  savedAt: string;
-  rawMusicXml: string;
-};
-
 export default function Home() {
   const [score, setScore] = useState<ParsedScore | null>(null);
   const [diagnostics, setDiagnostics] = useState<OMRDiagnostics | null>(null);
@@ -53,22 +51,14 @@ export default function Home() {
   const [loopStartMeasure, setLoopStartMeasure] = useState("1");
   const [loopEndMeasure, setLoopEndMeasure] = useState("2");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [savedMusic, setSavedMusic] = useState<SavedMusicItem[]>(() => {
-    if (typeof window === "undefined") {
-      return [];
-    }
-    const raw = localStorage.getItem("choir-web-saved-music-v1");
-    if (!raw) {
-      return [];
-    }
-    try {
-      return JSON.parse(raw) as SavedMusicItem[];
-    } catch {
-      localStorage.removeItem("choir-web-saved-music-v1");
-      return [];
-    }
-  });
+  const [savedMusic, setSavedMusic] = useState<SavedScoreSummary[]>([]);
+  const [savedMusicLoading, setSavedMusicLoading] = useState(false);
+  const [currentScoreId, setCurrentScoreId] = useState<string | null>(null);
+  const [pendingTempoPercent, setPendingTempoPercent] = useState<number | null>(null);
+  const [replaceTargetId, setReplaceTargetId] = useState<string | null>(null);
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
   const playerRef = useRef<ScorePlayer | null>(null);
 
   useEffect(() => {
@@ -102,6 +92,10 @@ export default function Home() {
     const player = new ScorePlayer(score);
     playerRef.current?.dispose();
     playerRef.current = player;
+    if (pendingTempoPercent != null) {
+      player.setTempoPercent(pendingTempoPercent);
+      setPendingTempoPercent(null);
+    }
     const unsub = player.onUpdate((next) => setSnapshot(next));
     return () => {
       unsub();
@@ -110,15 +104,32 @@ export default function Home() {
         playerRef.current = null;
       }
     };
-  }, [score]);
+  }, [score, pendingTempoPercent]);
 
   useEffect(() => {
     playerRef.current?.setEnabledCanonicalParts(selectedParts);
   }, [selectedParts]);
 
+  const refreshSavedMusic = useCallback(async () => {
+    try {
+      setSavedMusicLoading(true);
+      const response = await fetch("/api/my-music");
+      const body = (await response.json()) as { items?: SavedScoreSummary[]; message?: string };
+      if (!response.ok) {
+        throw new Error(body.message ?? "Failed to load My Music.");
+      }
+      setSavedMusic(body.items ?? []);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Failed to load My Music.";
+      setError(message);
+    } finally {
+      setSavedMusicLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    localStorage.setItem("choir-web-saved-music-v1", JSON.stringify(savedMusic));
-  }, [savedMusic]);
+    void refreshSavedMusic();
+  }, [refreshSavedMusic]);
 
   const measureNumbers = useMemo(
     () => score?.measures.map((measure) => measure.displayNumber) ?? [],
@@ -132,35 +143,31 @@ export default function Home() {
     const file = pendingFile;
     setPendingFile(null);
     setError(null);
+    setFeedbackMessage(null);
     setIsBusy(true);
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch("/api/score/recognize", {
+      const response = await fetch("/api/my-music/process", {
         method: "POST",
         body: formData,
       });
       const body = (await response.json()) as {
-        musicXml?: string;
-        diagnostics?: OMRDiagnostics;
         message?: string;
+        diagnostics?: OMRDiagnostics;
+        parsedScore?: ParsedScore;
+        savedScore?: SavedScoreSummary;
       };
-      if (!response.ok || !body.musicXml) {
+      if (!response.ok || !body.parsedScore || !body.savedScore) {
         throw new Error(body.message ?? "Recognition failed.");
       }
-      const parsed = parseMusicXmlToScore(body.musicXml, "omr");
-      setSelectedParts(defaultSelectedPartsFromScore(parsed));
-      setScore(parsed);
+      setSelectedParts(defaultSelectedPartsFromScore(body.parsedScore));
+      setScore(body.parsedScore);
       setDiagnostics(body.diagnostics ?? null);
-      setSavedMusic((prev) => [
-        {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          title: parsed.title,
-          savedAt: new Date().toISOString(),
-          rawMusicXml: body.musicXml as string,
-        },
-        ...prev,
-      ]);
+      setCurrentScoreId(body.savedScore.id);
+      setPendingTempoPercent(body.savedScore.lastUsedTempoPercent);
+      setFeedbackMessage(body.message ?? "✓ Saved to My Music");
+      await refreshSavedMusic();
       setActivePanel("rehearsal");
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "Unknown recognition error.";
@@ -168,13 +175,20 @@ export default function Home() {
     } finally {
       setIsBusy(false);
     }
-  }, [pendingFile]);
+  }, [pendingFile, refreshSavedMusic]);
 
-  const loadSavedScore = (item: SavedMusicItem) => {
+  const loadSavedScore = async (id: string) => {
     try {
-      const parsed = parseMusicXmlToScore(item.rawMusicXml, "musicxml");
-      setSelectedParts(defaultSelectedPartsFromScore(parsed));
-      setScore(parsed);
+      setFeedbackMessage(null);
+      const response = await fetch(`/api/my-music/${id}`);
+      const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+      if (!response.ok || !body.item) {
+        throw new Error(body.message ?? "Could not load saved score.");
+      }
+      setSelectedParts(defaultSelectedPartsFromScore(body.item.parsedScore));
+      setScore(body.item.parsedScore);
+      setCurrentScoreId(body.item.id);
+      setPendingTempoPercent(body.item.lastUsedTempoPercent);
       setDiagnostics(null);
       setError(null);
       setActivePanel("rehearsal");
@@ -182,6 +196,91 @@ export default function Home() {
       const message = caught instanceof Error ? caught.message : "Could not load saved score.";
       setError(message);
     }
+  };
+
+  const renameSavedScore = async (item: SavedScoreSummary) => {
+    const nextTitle = prompt("Rename piece", item.title)?.trim();
+    if (!nextTitle || nextTitle === item.title) {
+      return;
+    }
+    const response = await fetch(`/api/my-music/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "rename", title: nextTitle }),
+    });
+    if (response.ok) {
+      setFeedbackMessage(`Renamed to "${nextTitle}"`);
+      await refreshSavedMusic();
+      if (currentScoreId === item.id && score) {
+        setScore({ ...score, title: nextTitle });
+      }
+      return;
+    }
+    const body = (await response.json()) as { message?: string };
+    setError(body.message ?? "Failed to rename score.");
+  };
+
+  const reprocessSavedScore = async (item: SavedScoreSummary) => {
+    const response = await fetch(`/api/my-music/${item.id}/reprocess`, { method: "POST" });
+    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    if (!response.ok || !body.item) {
+      setError(body.message ?? "Failed to reprocess score.");
+      return;
+    }
+    setFeedbackMessage("Score reprocessed.");
+    await refreshSavedMusic();
+    if (currentScoreId === item.id) {
+      setSelectedParts(defaultSelectedPartsFromScore(body.item.parsedScore));
+      setScore(body.item.parsedScore);
+    }
+  };
+
+  const requestReplacePages = (itemId: string) => {
+    setReplaceTargetId(itemId);
+    replaceInputRef.current?.click();
+  };
+
+  const handleReplacePagesSelected = async (file: File | null) => {
+    if (!replaceTargetId || !file) {
+      return;
+    }
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch(`/api/my-music/${replaceTargetId}/replace-pages`, {
+      method: "POST",
+      body: formData,
+    });
+    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    if (!response.ok || !body.item) {
+      setError(body.message ?? "Failed to replace score pages.");
+      return;
+    }
+    setFeedbackMessage("Pages replaced and score reprocessed.");
+    await refreshSavedMusic();
+    if (currentScoreId === replaceTargetId) {
+      setSelectedParts(defaultSelectedPartsFromScore(body.item.parsedScore));
+      setScore(body.item.parsedScore);
+    }
+    setReplaceTargetId(null);
+  };
+
+  const deleteSavedScore = async (item: SavedScoreSummary) => {
+    if (!confirm(`Delete "${item.title}" from My Music?`)) {
+      return;
+    }
+    const response = await fetch(`/api/my-music/${item.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      const body = (await response.json()) as { message?: string };
+      setError(body.message ?? "Failed to delete score.");
+      return;
+    }
+    setFeedbackMessage(`Deleted "${item.title}"`);
+    if (currentScoreId === item.id) {
+      setCurrentScoreId(null);
+      setScore(null);
+      setDiagnostics(null);
+    }
+    await refreshSavedMusic();
   };
 
   const availableCanonicalParts = useMemo(() => {
@@ -235,6 +334,26 @@ export default function Home() {
     playerRef.current?.setLoopRange(start, end);
   };
 
+  const persistTempoPercent = useCallback(
+    async (tempoPercent: number) => {
+      if (!currentScoreId) {
+        return;
+      }
+      await fetch(`/api/my-music/${currentScoreId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "updateTempo", tempoPercent }),
+      });
+    },
+    [currentScoreId]
+  );
+
+  const adjustTempo = (delta: number) => {
+    playerRef.current?.adjustTempoPercent(delta);
+    const nextTempo = Math.max(50, Math.min(120, Math.round(snapshot.tempoPercent + delta)));
+    void persistTempoPercent(nextTempo);
+  };
+
   const voiceDetections = score?.parts ?? [];
   const quality = diagnostics?.quality;
   const status = isBusy
@@ -274,8 +393,8 @@ export default function Home() {
             onTogglePlay={() => playerRef.current?.togglePlayPause()}
             onBack={() => playerRef.current?.jumpRelativeMeasures(-2)}
             onForward={() => playerRef.current?.jumpRelativeMeasures(2)}
-            onTempoDown={() => playerRef.current?.adjustTempoPercent(-5)}
-            onTempoUp={() => playerRef.current?.adjustTempoPercent(5)}
+            onTempoDown={() => adjustTempo(-5)}
+            onTempoUp={() => adjustTempo(5)}
             onGoToMeasure={gotoSelectedMeasure}
             onStartLoop={setLoopRange}
             onStopLoop={() => playerRef.current?.clearLoop()}
@@ -314,8 +433,8 @@ export default function Home() {
             onTogglePlay={() => playerRef.current?.togglePlayPause()}
             onBack={() => playerRef.current?.jumpRelativeMeasures(-2)}
             onForward={() => playerRef.current?.jumpRelativeMeasures(2)}
-            onTempoDown={() => playerRef.current?.adjustTempoPercent(-5)}
-            onTempoUp={() => playerRef.current?.adjustTempoPercent(5)}
+            onTempoDown={() => adjustTempo(-5)}
+            onTempoUp={() => adjustTempo(5)}
             onGoToMeasure={gotoSelectedMeasure}
             onStartLoop={setLoopRange}
             onStopLoop={() => playerRef.current?.clearLoop()}
@@ -390,6 +509,13 @@ export default function Home() {
                 disabled={isBusy || !pendingFile}
               />
             </div>
+            <button
+              type="button"
+              onClick={() => setActivePanel("my-music")}
+              className="mt-3 w-full rounded-xl bg-zinc-700 px-4 py-4 text-left text-lg font-semibold hover:bg-zinc-600"
+            >
+              MY MUSIC
+            </button>
             <input
               ref={uploadInputRef}
               className="hidden"
@@ -407,6 +533,7 @@ export default function Home() {
             </p>
             {isBusy ? <p className="mt-3 text-sm text-cyan-300">PROCESSING MUSIC...</p> : null}
             {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
+            {feedbackMessage ? <p className="mt-3 text-sm text-emerald-300">{feedbackMessage}</p> : null}
             {diagnostics ? (
               <div className="mt-3 rounded-xl border border-zinc-600 bg-zinc-900/45 p-3 text-sm">
                 <p className="font-medium">
@@ -427,23 +554,56 @@ export default function Home() {
         {activePanel === "my-music" ? (
           <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
             <h2 className="text-lg font-semibold">My Music</h2>
-            <p className="mt-1 text-sm text-zinc-300">
-              Saved from recognized uploads in this same web app.
-            </p>
+            <p className="mt-1 text-sm text-zinc-300">Persistent local storage (SQLite + files).</p>
+            {feedbackMessage ? <p className="mt-2 text-sm text-emerald-300">{feedbackMessage}</p> : null}
+            {error ? <p className="mt-2 text-sm text-rose-300">{error}</p> : null}
+            <input
+              ref={replaceInputRef}
+              className="hidden"
+              type="file"
+              accept=".jpg,.jpeg,.png,.pdf"
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                void handleReplacePagesSelected(file);
+                event.currentTarget.value = "";
+              }}
+            />
             <div className="mt-4 space-y-2">
-              {savedMusic.length ? (
-                savedMusic.slice(0, 20).map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => loadSavedScore(item)}
-                    className="w-full rounded-xl bg-zinc-800 px-3 py-3 text-left hover:bg-zinc-700"
-                  >
-                    <p className="font-medium">{item.title}</p>
+              {savedMusicLoading ? (
+                <p className="text-sm text-zinc-300">Loading My Music...</p>
+              ) : savedMusic.length ? (
+                savedMusic.slice(0, 50).map((item) => (
+                  <div key={item.id} className="rounded-xl border border-zinc-700 bg-zinc-800/70 p-3">
+                    <p className="text-lg font-semibold">{item.title}</p>
+                    <p className="text-sm text-zinc-300">{item.partTextureLabel}</p>
+                    <p className="text-sm text-zinc-300">{item.measureCount} Measures</p>
                     <p className="text-xs text-zinc-400">
-                      {new Date(item.savedAt).toLocaleString()}
+                      Imported {new Date(item.importedAt).toLocaleString()}
                     </p>
-                  </button>
+                    <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+                      <ControlButton
+                        label="REHEARSE"
+                        accent
+                        onClick={() => void loadSavedScore(item.id)}
+                      />
+                      <ControlButton
+                        label="Rename"
+                        onClick={() => void renameSavedScore(item)}
+                      />
+                      <ControlButton
+                        label="Reprocess"
+                        onClick={() => void reprocessSavedScore(item)}
+                      />
+                      <ControlButton
+                        label="Replace Pages"
+                        onClick={() => requestReplacePages(item.id)}
+                      />
+                      <ControlButton
+                        label="Delete"
+                        onClick={() => void deleteSavedScore(item)}
+                      />
+                    </div>
+                  </div>
                 ))
               ) : (
                 <p className="text-sm text-zinc-400">No saved scores yet.</p>
@@ -471,8 +631,8 @@ export default function Home() {
               onTogglePlay={() => playerRef.current?.togglePlayPause()}
               onBack={() => playerRef.current?.jumpRelativeMeasures(-2)}
               onForward={() => playerRef.current?.jumpRelativeMeasures(2)}
-              onTempoDown={() => playerRef.current?.adjustTempoPercent(-5)}
-              onTempoUp={() => playerRef.current?.adjustTempoPercent(5)}
+              onTempoDown={() => adjustTempo(-5)}
+              onTempoUp={() => adjustTempo(5)}
               onGoToMeasure={gotoSelectedMeasure}
               onStartLoop={setLoopRange}
               onStopLoop={() => playerRef.current?.clearLoop()}

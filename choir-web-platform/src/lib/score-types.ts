@@ -55,3 +55,25 @@ export interface OMRDiagnostics {
   };
 }
 
+export interface SavedScoreSummary {
+  id: string;
+  title: string;
+  importedAt: string;
+  sourceFileName: string;
+  partTextureLabel: string;
+  measureCount: number;
+  detectedParts: CanonicalPartId[];
+  lastUsedTempoPercent: number;
+}
+
+export interface SavedScoreRecord extends SavedScoreSummary {
+  sourceFilePath: string;
+  sourceMimeType: string;
+  parsedScore: ParsedScore;
+  recognizedMusicXml: string;
+  directorConfirmedPartAssignments: Record<string, CanonicalPartId>;
+  recognitionWarnings: string[];
+  recognitionQuality: OMRDiagnostics["quality"];
+  recognitionProvider: string;
+}
+
