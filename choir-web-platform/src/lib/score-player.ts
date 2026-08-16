@@ -3,9 +3,11 @@ import type { CanonicalPartId, ParsedScore } from "@/lib/score-types";
 
 export interface PlaybackSnapshot {
   isPlaying: boolean;
+  isCountingIn: boolean;
   currentBeat: number;
   currentMeasure: number;
   tempoPercent: number;
+  countInMeasures: 0 | 1 | 2;
   loopStartMeasure: number | null;
   loopEndMeasure: number | null;
 }
@@ -58,16 +60,21 @@ export class ScorePlayer {
 
   private readonly listeners = new Set<(snapshot: PlaybackSnapshot) => void>();
   private ticker: ReturnType<typeof setInterval> | null = null;
+  private countInTimer: ReturnType<typeof setTimeout> | null = null;
 
   private initialized = false;
   private isPlaying = false;
+  private isCountingIn = false;
   private currentBeat = 0;
   private playStartBeat = 0;
   private playStartTimeSec = 0;
   private tempoPercent = 100;
+  private countInMeasures: 0 | 1 | 2 = 1;
   private nextEventIndex = 0;
   private loopStartMeasure: number | null = null;
   private loopEndMeasure: number | null = null;
+  private countInBeatsPerMeasure = 4;
+  private remainingCountInBeats = 0;
 
   constructor(score: ParsedScore) {
     this.score = score;
@@ -102,9 +109,11 @@ export class ScorePlayer {
   snapshot(): PlaybackSnapshot {
     return {
       isPlaying: this.isPlaying,
+      isCountingIn: this.isCountingIn,
       currentBeat: this.currentBeat,
       currentMeasure: this.measureAtBeat(this.currentBeat),
       tempoPercent: this.tempoPercent,
+      countInMeasures: this.countInMeasures,
       loopStartMeasure: this.loopStartMeasure,
       loopEndMeasure: this.loopEndMeasure,
     };
@@ -129,6 +138,11 @@ export class ScorePlayer {
     this.setTempoPercent(this.tempoPercent + delta);
   }
 
+  setCountInMeasures(value: 0 | 1 | 2) {
+    this.countInMeasures = value;
+    this.emitSnapshot();
+  }
+
   setEnabledCanonicalParts(parts: Iterable<CanonicalPartId>) {
     this.enabledParts.clear();
     for (const part of parts) {
@@ -147,6 +161,10 @@ export class ScorePlayer {
     this.playStartBeat = this.currentBeat;
     this.playStartTimeSec = Tone.now();
     this.nextEventIndex = this.findNextNoteIndex(this.currentBeat);
+    if (this.isPlaying && this.isCountingIn) {
+      this.clearCountInTimer();
+      this.beginCountIn();
+    }
     this.emitSnapshot();
   }
 
@@ -187,9 +205,12 @@ export class ScorePlayer {
     }
     await this.initialize();
     this.isPlaying = true;
-    this.playStartBeat = this.currentBeat;
-    this.playStartTimeSec = Tone.now();
     this.nextEventIndex = this.findNextNoteIndex(this.currentBeat);
+    if (this.countInMeasures > 0) {
+      this.beginCountIn();
+    } else {
+      this.beginPlaybackNow();
+    }
     this.startTicker();
     this.emitSnapshot();
   }
@@ -198,7 +219,13 @@ export class ScorePlayer {
     if (!this.isPlaying) {
       return;
     }
-    this.currentBeat = this.nowBeat();
+    if (this.isCountingIn) {
+      this.clearCountInTimer();
+      this.isCountingIn = false;
+      this.remainingCountInBeats = 0;
+    } else {
+      this.currentBeat = this.nowBeat();
+    }
     this.isPlaying = false;
     if (this.ticker) {
       clearInterval(this.ticker);
@@ -242,6 +269,9 @@ export class ScorePlayer {
     if (!this.isPlaying) {
       return this.currentBeat;
     }
+    if (this.isCountingIn) {
+      return this.currentBeat;
+    }
     const elapsedSec = Tone.now() - this.playStartTimeSec;
     return this.playStartBeat + elapsedSec / this.secondsPerBeat();
   }
@@ -260,6 +290,10 @@ export class ScorePlayer {
 
   private tick() {
     if (!this.isPlaying) {
+      return;
+    }
+    if (this.isCountingIn) {
+      this.emitSnapshot();
       return;
     }
     const currentBeat = this.nowBeat();
@@ -359,6 +393,60 @@ export class ScorePlayer {
     const snap = this.snapshot();
     for (const listener of this.listeners) {
       listener(snap);
+    }
+  }
+
+  private beginPlaybackNow() {
+    this.playStartBeat = this.currentBeat;
+    this.playStartTimeSec = Tone.now();
+  }
+
+  private beginCountIn() {
+    const currentMeasure = this.score.measures.find(
+      (measure) => measure.displayNumber === this.measureAtBeat(this.currentBeat)
+    );
+    this.countInBeatsPerMeasure = Math.max(1, Math.round(currentMeasure?.beatsInMeasure ?? 4));
+    this.remainingCountInBeats = this.countInMeasures * this.countInBeatsPerMeasure;
+    this.isCountingIn = this.remainingCountInBeats > 0;
+    if (!this.isCountingIn) {
+      this.beginPlaybackNow();
+      return;
+    }
+    this.runNextCountInBeat(0);
+  }
+
+  private runNextCountInBeat(delayMs: number) {
+    this.clearCountInTimer();
+    this.countInTimer = setTimeout(() => {
+      if (!this.isPlaying || !this.isCountingIn) {
+        return;
+      }
+      if (this.remainingCountInBeats <= 0) {
+        this.isCountingIn = false;
+        this.beginPlaybackNow();
+        this.emitSnapshot();
+        return;
+      }
+
+      const beatOffsetInMeasure = this.remainingCountInBeats % this.countInBeatsPerMeasure;
+      const isDownbeat = beatOffsetInMeasure === 0;
+      this.playCountInClick(isDownbeat);
+      this.remainingCountInBeats -= 1;
+      this.emitSnapshot();
+      this.runNextCountInBeat(this.secondsPerBeat() * 1000);
+    }, Math.max(0, delayMs));
+  }
+
+  private playCountInClick(isDownbeat: boolean) {
+    const frequency = isDownbeat ? 1320 : 880;
+    const volume = isDownbeat ? 0.9 : 0.76;
+    this.synths.UNKNOWN.triggerAttackRelease(frequency, 0.08, Tone.now(), volume);
+  }
+
+  private clearCountInTimer() {
+    if (this.countInTimer) {
+      clearTimeout(this.countInTimer);
+      this.countInTimer = null;
     }
   }
 }

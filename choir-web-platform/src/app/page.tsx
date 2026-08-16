@@ -22,9 +22,11 @@ const PART_BUTTONS: CanonicalPartId[] = [
 
 const initialSnapshot: PlaybackSnapshot = {
   isPlaying: false,
+  isCountingIn: false,
   currentBeat: 0,
   currentMeasure: 1,
   tempoPercent: 100,
+  countInMeasures: 1,
   loopStartMeasure: null,
   loopEndMeasure: null,
 };
@@ -65,6 +67,7 @@ export default function Home() {
   const [studentMode, setStudentMode] = useState<StudentMode | null>(null);
   const [activePanel, setActivePanel] = useState<DirectorPanel>("upload");
   const [snapshot, setSnapshot] = useState<PlaybackSnapshot>(initialSnapshot);
+  const [countInMeasures, setCountInMeasures] = useState<0 | 1 | 2>(1);
   const [selectedParts, setSelectedParts] = useState<Set<CanonicalPartId>>(new Set(PART_BUTTONS));
   const [gotoMeasure, setGotoMeasure] = useState("1");
   const [loopStartMeasure, setLoopStartMeasure] = useState("1");
@@ -122,6 +125,7 @@ export default function Home() {
     const player = new ScorePlayer(score);
     playerRef.current?.dispose();
     playerRef.current = player;
+    player.setCountInMeasures(countInMeasures);
     if (pendingTempoPercentRef.current != null) {
       player.setTempoPercent(pendingTempoPercentRef.current);
       pendingTempoPercentRef.current = null;
@@ -134,11 +138,15 @@ export default function Home() {
         playerRef.current = null;
       }
     };
-  }, [score]);
+  }, [countInMeasures, score]);
 
   useEffect(() => {
     playerRef.current?.setEnabledCanonicalParts(selectedParts);
   }, [selectedParts]);
+
+  useEffect(() => {
+    playerRef.current?.setCountInMeasures(countInMeasures);
+  }, [countInMeasures]);
 
   const refreshSavedMusic = useCallback(async () => {
     try {
@@ -429,6 +437,15 @@ export default function Home() {
     playerRef.current?.seekToMeasure(measure);
   };
 
+  const jumpToMeasure = (measure: number) => {
+    setGotoMeasure(String(measure));
+    playerRef.current?.seekToMeasure(measure);
+  };
+
+  const jumpByMeasures = (delta: number) => {
+    playerRef.current?.jumpRelativeMeasures(delta);
+  };
+
   const setLoopRange = () => {
     const start = Number(loopStartMeasure);
     const end = Number(loopEndMeasure);
@@ -594,6 +611,8 @@ export default function Home() {
   const quality = diagnostics?.quality;
   const status = isBusy
     ? "PROCESSING MUSIC..."
+    : snapshot.isCountingIn
+      ? "COUNT-IN..."
     : score
       ? "READY TO REHEARSE"
       : "UPLOAD SCORE";
@@ -620,18 +639,26 @@ export default function Home() {
           <RemoteControlPanel
             scoreLoaded={Boolean(score)}
             snapshot={snapshot}
+            measureNumbers={measureNumbers}
             gotoMeasure={gotoMeasure}
             setGotoMeasure={setGotoMeasure}
             loopStartMeasure={loopStartMeasure}
             setLoopStartMeasure={setLoopStartMeasure}
             loopEndMeasure={loopEndMeasure}
             setLoopEndMeasure={setLoopEndMeasure}
+            countInMeasures={countInMeasures}
+            onSetCountInMeasures={setCountInMeasures}
             onTogglePlay={() => playerRef.current?.togglePlayPause()}
-            onBack={() => playerRef.current?.jumpRelativeMeasures(-2)}
-            onForward={() => playerRef.current?.jumpRelativeMeasures(2)}
+            onBack1={() => jumpByMeasures(-1)}
+            onBack2={() => jumpByMeasures(-2)}
+            onBack4={() => jumpByMeasures(-4)}
+            onForward1={() => jumpByMeasures(1)}
+            onForward2={() => jumpByMeasures(2)}
+            onForward4={() => jumpByMeasures(4)}
             onTempoDown={() => adjustTempo(-5)}
             onTempoUp={() => adjustTempo(5)}
             onGoToMeasure={gotoSelectedMeasure}
+            onJumpToMeasure={jumpToMeasure}
             onStartLoop={setLoopRange}
             onStopLoop={() => playerRef.current?.clearLoop()}
             selectedParts={selectedParts}
@@ -652,26 +679,34 @@ export default function Home() {
           <header className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
             <p className="text-xs tracking-[0.14em] text-zinc-300">MOBILE REMOTE • WEBSITE ONLY</p>
             <h1 className="mt-1 text-2xl font-semibold">Rehearsal Remote</h1>
+            <p className="mt-3 text-4xl font-bold text-cyan-300">m. {snapshot.currentMeasure}</p>
             <p className="mt-2 text-zinc-300">
-              m.{snapshot.currentMeasure} | {snapshot.tempoPercent}% |{" "}
-              {snapshot.isPlaying ? "Playing" : "Paused"}
+              {snapshot.tempoPercent}% • {snapshot.isCountingIn ? "Count-in" : snapshot.isPlaying ? "Playing" : "Paused"}
             </p>
           </header>
           <RemoteControlPanel
             scoreLoaded={Boolean(score)}
             snapshot={snapshot}
+            measureNumbers={measureNumbers}
             gotoMeasure={gotoMeasure}
             setGotoMeasure={setGotoMeasure}
             loopStartMeasure={loopStartMeasure}
             setLoopStartMeasure={setLoopStartMeasure}
             loopEndMeasure={loopEndMeasure}
             setLoopEndMeasure={setLoopEndMeasure}
+            countInMeasures={countInMeasures}
+            onSetCountInMeasures={setCountInMeasures}
             onTogglePlay={() => playerRef.current?.togglePlayPause()}
-            onBack={() => playerRef.current?.jumpRelativeMeasures(-2)}
-            onForward={() => playerRef.current?.jumpRelativeMeasures(2)}
+            onBack1={() => jumpByMeasures(-1)}
+            onBack2={() => jumpByMeasures(-2)}
+            onBack4={() => jumpByMeasures(-4)}
+            onForward1={() => jumpByMeasures(1)}
+            onForward2={() => jumpByMeasures(2)}
+            onForward4={() => jumpByMeasures(4)}
             onTempoDown={() => adjustTempo(-5)}
             onTempoUp={() => adjustTempo(5)}
             onGoToMeasure={gotoSelectedMeasure}
+            onJumpToMeasure={jumpToMeasure}
             onStartLoop={setLoopRange}
             onStopLoop={() => playerRef.current?.clearLoop()}
             selectedParts={selectedParts}
@@ -1194,25 +1229,33 @@ export default function Home() {
         {activePanel === "rehearsal" ? (
           <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
             <h2 className="text-lg font-semibold">Rehearsal</h2>
+            <p className="mt-2 text-4xl font-bold text-cyan-300">m. {snapshot.currentMeasure}</p>
             <p className="mt-1 text-sm text-zinc-300">
-              m.{snapshot.currentMeasure} • {snapshot.tempoPercent}% •{" "}
-              {snapshot.isPlaying ? "Playing" : "Paused"}
+              {snapshot.tempoPercent}% • {snapshot.isCountingIn ? "Count-in" : snapshot.isPlaying ? "Playing" : "Paused"}
             </p>
             <RemoteControlPanel
               scoreLoaded={Boolean(score)}
               snapshot={snapshot}
+              measureNumbers={measureNumbers}
               gotoMeasure={gotoMeasure}
               setGotoMeasure={setGotoMeasure}
               loopStartMeasure={loopStartMeasure}
               setLoopStartMeasure={setLoopStartMeasure}
               loopEndMeasure={loopEndMeasure}
               setLoopEndMeasure={setLoopEndMeasure}
+              countInMeasures={countInMeasures}
+              onSetCountInMeasures={setCountInMeasures}
               onTogglePlay={() => playerRef.current?.togglePlayPause()}
-              onBack={() => playerRef.current?.jumpRelativeMeasures(-2)}
-              onForward={() => playerRef.current?.jumpRelativeMeasures(2)}
+              onBack1={() => jumpByMeasures(-1)}
+              onBack2={() => jumpByMeasures(-2)}
+              onBack4={() => jumpByMeasures(-4)}
+              onForward1={() => jumpByMeasures(1)}
+              onForward2={() => jumpByMeasures(2)}
+              onForward4={() => jumpByMeasures(4)}
               onTempoDown={() => adjustTempo(-5)}
               onTempoUp={() => adjustTempo(5)}
               onGoToMeasure={gotoSelectedMeasure}
+              onJumpToMeasure={jumpToMeasure}
               onStartLoop={setLoopRange}
               onStopLoop={() => playerRef.current?.clearLoop()}
               selectedParts={selectedParts}
@@ -1443,18 +1486,26 @@ function ComingSoonPanel(props: { title: string; message: string }) {
 function RemoteControlPanel(props: {
   scoreLoaded: boolean;
   snapshot: PlaybackSnapshot;
+  measureNumbers: number[];
   gotoMeasure: string;
   setGotoMeasure: (value: string) => void;
   loopStartMeasure: string;
   setLoopStartMeasure: (value: string) => void;
   loopEndMeasure: string;
   setLoopEndMeasure: (value: string) => void;
+  countInMeasures: 0 | 1 | 2;
+  onSetCountInMeasures: (value: 0 | 1 | 2) => void;
   onTogglePlay: () => void;
-  onBack: () => void;
-  onForward: () => void;
+  onBack1: () => void;
+  onBack2: () => void;
+  onBack4: () => void;
+  onForward1: () => void;
+  onForward2: () => void;
+  onForward4: () => void;
   onTempoDown: () => void;
   onTempoUp: () => void;
   onGoToMeasure: () => void;
+  onJumpToMeasure: (measure: number) => void;
   onStartLoop: () => void;
   onStopLoop: () => void;
   selectedParts: Set<CanonicalPartId>;
@@ -1466,10 +1517,31 @@ function RemoteControlPanel(props: {
   const sizeClasses = props.largeButtons
     ? "py-5 text-lg font-semibold"
     : "py-3 text-sm font-semibold";
+  const [showMeasurePicker, setShowMeasurePicker] = useState(false);
 
   return (
     <div className="mt-4 space-y-4">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="rounded-xl border border-cyan-700/60 bg-cyan-900/20 px-4 py-3">
+        <p className="text-xs tracking-[0.12em] text-cyan-200">CURRENT MEASURE</p>
+        <p className={`${props.largeButtons ? "text-5xl" : "text-4xl"} font-bold text-cyan-300`}>
+          m. {props.snapshot.currentMeasure}
+        </p>
+        <p className="text-sm text-cyan-100">
+          {props.snapshot.isCountingIn
+            ? "Count-in..."
+            : props.snapshot.isPlaying
+              ? "Playing"
+              : "Paused"}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <ControlButton
+          label="BACK 2"
+          onClick={props.onBack2}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
         <ControlButton
           label={props.snapshot.isPlaying ? "PAUSE" : "PLAY"}
           accent
@@ -1478,14 +1550,35 @@ function RemoteControlPanel(props: {
           large={props.largeButtons}
         />
         <ControlButton
-          label="BACK 2"
-          onClick={props.onBack}
+          label="FORWARD 2"
+          onClick={props.onForward2}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <ControlButton
+          label="BACK 1"
+          onClick={props.onBack1}
           disabled={!props.scoreLoaded}
           large={props.largeButtons}
         />
         <ControlButton
-          label="FORWARD 2"
-          onClick={props.onForward}
+          label="BACK 4"
+          onClick={props.onBack4}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="FORWARD 1"
+          onClick={props.onForward1}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="FORWARD 4"
+          onClick={props.onForward4}
           disabled={!props.scoreLoaded}
           large={props.largeButtons}
         />
@@ -1503,7 +1596,25 @@ function RemoteControlPanel(props: {
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
+        <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">COUNT-IN</p>
+        <div className="grid grid-cols-3 gap-2">
+          {[0, 1, 2].map((count) => (
+            <button
+              key={count}
+              type="button"
+              onClick={() => props.onSetCountInMeasures(count as 0 | 1 | 2)}
+              className={`rounded-xl px-3 ${sizeClasses} ${
+                props.countInMeasures === count ? "bg-cyan-400 text-black" : "bg-zinc-700 text-zinc-100"
+              }`}
+            >
+              {count === 0 ? "OFF" : `${count} MEASURE${count === 1 ? "" : "S"}`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <input
           className={`rounded-xl border border-zinc-600 bg-zinc-900 px-3 ${sizeClasses}`}
           placeholder="MEASURE"
@@ -1516,7 +1627,36 @@ function RemoteControlPanel(props: {
           disabled={!props.scoreLoaded}
           large={props.largeButtons}
         />
+        <ControlButton
+          label="MEASURES"
+          onClick={() => setShowMeasurePicker((prev) => !prev)}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
       </div>
+
+      {showMeasurePicker ? (
+        <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
+          <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">MEASURES</p>
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-zinc-700 p-2">
+            <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+              {props.measureNumbers.map((measure) => (
+                <button
+                  key={measure}
+                  type="button"
+                  onClick={() => {
+                    props.setGotoMeasure(String(measure));
+                    props.onJumpToMeasure(measure);
+                  }}
+                  className="rounded-lg bg-zinc-700 px-3 py-3 text-sm font-semibold text-zinc-100 hover:bg-cyan-500 hover:text-black"
+                >
+                  {measure}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-3">
         <input
