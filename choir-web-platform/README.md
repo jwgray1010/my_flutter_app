@@ -1,19 +1,37 @@
-# Choir Rehearsal Web Platform (Phase 1 Prototype)
+# Choir Rehearsal Web Platform (Website-Only Prototype)
 
-This folder contains the **web-first prototype** for the choral rehearsal platform.
+This folder contains the **single responsive web application** for the choral rehearsal platform.
 
-Current focus is Phase 1 from the master build order:
+There are no separate native apps in this prototype:
+- no iOS app
+- no separate remote app
+- no separate student app
 
-1. Upload / scan one score page
+All experiences are rendered from the same Next.js project.
+
+Current focus remains Phase 1 from the build order:
+
+1. Upload one score page file
 2. OMR transcription to MusicXML
 3. Parse measures + parts
 4. Playback with part isolation, tempo, seeking, and looping
 
+## Website-only responsive behavior
+
+The same URL serves multiple contexts:
+- **Director layout** on desktop/tablet (Upload Score, My Music, Rehearsal, Warmups, Stations, Student/Teacher tools)
+- **Mobile remote layout** on phone with large controls
+- **Student mode routes** via query-string link/QR (`?mode=station`, `?mode=sectional`, `?mode=solo`, `?mode=checkin`, `?mode=vocal`)
+
 ## What is implemented now
 
-- **SCAN MUSIC** (camera capture on supported devices)
-- **UPLOAD SCORE** (JPG, PNG, WEBP, PDF, XML/MusicXML)
-- MusicXML direct path (bypasses OMR)
+- Upload-first score intake (`.jpg`, `.jpeg`, `.png`, `.pdf`)
+- Explicit processing flow:
+  - `UPLOAD SCORE`
+  - file name shown
+  - `PROCESS MUSIC`
+  - `PROCESSING MUSIC...`
+  - `READY TO REHEARSE`
 - Server-side OMR provider abstraction (`src/lib/server/omr/provider.ts`)
 - OMR provider implementation using `homr` (`scripts/run_homr.py`)
 - MusicXML parsing for:
@@ -23,14 +41,13 @@ Current focus is Phase 1 from the master build order:
   - Note events for playback
 - Playback engine supporting:
   - PLAY/PAUSE
-  - BACK 2 / FORWARD 2 measures
+  - BACK 2 / FORWARD 2
   - TEMPO - / TEMPO + (50% to 120%)
   - Measure jump
   - Loop range set/clear
   - Part isolation (S/A/T/B/Piano combinations)
-  - Starting pitches
 - Photo quality diagnostics (blur/contrast/glare/perspective warning hints)
-- Local **MY MUSIC** storage using browser localStorage
+- Local `MY MUSIC` storage using browser localStorage
 
 ## Local setup
 
@@ -53,6 +70,12 @@ npm run dev
 ```
 
 Open http://localhost:3000
+
+For same-network device access during rehearsal, open on local IP from another device, for example:
+
+```text
+http://192.168.x.x:3000
+```
 
 ## OMR provider notes
 

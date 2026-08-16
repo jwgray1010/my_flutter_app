@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { parseMusicXmlToScore } from "@/lib/musicxml";
 import { ScorePlayer, type PlaybackSnapshot } from "@/lib/score-player";
 import type { CanonicalPartId, OMRDiagnostics, ParsedScore } from "@/lib/score-types";
@@ -22,19 +23,65 @@ const initialSnapshot: PlaybackSnapshot = {
   loopEndMeasure: null,
 };
 
+type DirectorPanel =
+  | "upload"
+  | "my-music"
+  | "rehearsal"
+  | "warmups"
+  | "stations"
+  | "tools";
+
+type StudentMode = "station" | "sectional" | "solo" | "checkin" | "vocal";
+
+type SavedMusicItem = {
+  id: string;
+  title: string;
+  savedAt: string;
+  rawMusicXml: string;
+};
+
 export default function Home() {
+  const searchParams = useSearchParams();
   const [score, setScore] = useState<ParsedScore | null>(null);
   const [diagnostics, setDiagnostics] = useState<OMRDiagnostics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const [isPhoneViewport, setIsPhoneViewport] = useState(false);
+  const [activePanel, setActivePanel] = useState<DirectorPanel>("upload");
   const [snapshot, setSnapshot] = useState<PlaybackSnapshot>(initialSnapshot);
   const [selectedParts, setSelectedParts] = useState<Set<CanonicalPartId>>(new Set(PART_BUTTONS));
   const [gotoMeasure, setGotoMeasure] = useState("1");
   const [loopStartMeasure, setLoopStartMeasure] = useState("1");
   const [loopEndMeasure, setLoopEndMeasure] = useState("2");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [savedMusic, setSavedMusic] = useState<SavedMusicItem[]>(() => {
+    if (typeof window === "undefined") {
+      return [];
+    }
+    const raw = localStorage.getItem("choir-web-saved-music-v1");
+    if (!raw) {
+      return [];
+    }
+    try {
+      return JSON.parse(raw) as SavedMusicItem[];
+    } catch {
+      localStorage.removeItem("choir-web-saved-music-v1");
+      return [];
+    }
+  });
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const playerRef = useRef<ScorePlayer | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const mediaQuery = window.matchMedia("(max-width: 768px)");
+    const updateViewport = () => setIsPhoneViewport(mediaQuery.matches);
+    updateViewport();
+    mediaQuery.addEventListener("change", updateViewport);
+    return () => mediaQuery.removeEventListener("change", updateViewport);
+  }, []);
 
   useEffect(() => {
     if (!score) {
@@ -56,6 +103,10 @@ export default function Home() {
   useEffect(() => {
     playerRef.current?.setEnabledCanonicalParts(selectedParts);
   }, [selectedParts]);
+
+  useEffect(() => {
+    localStorage.setItem("choir-web-saved-music-v1", JSON.stringify(savedMusic));
+  }, [savedMusic]);
 
   const measureNumbers = useMemo(
     () => score?.measures.map((measure) => measure.displayNumber) ?? [],
@@ -89,6 +140,16 @@ export default function Home() {
       setSelectedParts(defaultSelectedPartsFromScore(parsed));
       setScore(parsed);
       setDiagnostics(body.diagnostics ?? null);
+      setSavedMusic((prev) => [
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          title: parsed.title,
+          savedAt: new Date().toISOString(),
+          rawMusicXml: body.musicXml as string,
+        },
+        ...prev,
+      ]);
+      setActivePanel("rehearsal");
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "Unknown recognition error.";
       setError(message);
@@ -96,6 +157,20 @@ export default function Home() {
       setIsBusy(false);
     }
   }, [pendingFile]);
+
+  const loadSavedScore = (item: SavedMusicItem) => {
+    try {
+      const parsed = parseMusicXmlToScore(item.rawMusicXml, "musicxml");
+      setSelectedParts(defaultSelectedPartsFromScore(parsed));
+      setScore(parsed);
+      setDiagnostics(null);
+      setError(null);
+      setActivePanel("rehearsal");
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Could not load saved score.";
+      setError(message);
+    }
+  };
 
   const availableCanonicalParts = useMemo(() => {
     if (!score) {
@@ -107,6 +182,30 @@ export default function Home() {
     }
     return set;
   }, [score]);
+
+  const studentMode = useMemo(() => {
+    const modeValue = (
+      searchParams.get("mode") ??
+      searchParams.get("studentMode") ??
+      ""
+    ).toLowerCase();
+    if (modeValue === "station") {
+      return "station";
+    }
+    if (modeValue === "sectional") {
+      return "sectional";
+    }
+    if (modeValue === "solo") {
+      return "solo";
+    }
+    if (modeValue === "checkin") {
+      return "checkin";
+    }
+    if (modeValue === "vocal") {
+      return "vocal";
+    }
+    return null;
+  }, [searchParams]);
 
   const handleTogglePart = (part: CanonicalPartId) => {
     if (!availableCanonicalParts.has(part)) {
@@ -156,167 +255,297 @@ export default function Home() {
       ? "READY TO REHEARSE"
       : "UPLOAD SCORE";
 
+  if (studentMode) {
+    return (
+      <div className="min-h-screen bg-[#16181d] px-4 py-6 text-zinc-100">
+        <main className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+          <header className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
+            <p className="text-xs tracking-[0.14em] text-zinc-300">STUDENT MODE • WEBSITE ONLY</p>
+            <h1 className="mt-1 text-2xl font-semibold capitalize">{studentMode} Mode</h1>
+            <p className="mt-2 text-zinc-300">
+              Opened through a link/QR path in the same web application.
+            </p>
+          </header>
+          {studentMode === "checkin" || studentMode === "vocal" ? (
+            <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
+              <p className="text-zinc-200">
+                {studentMode === "checkin" ? "Check-In" : "Vocal Development"} tools are planned in
+                this same website. This route is reserved for those workflows.
+              </p>
+            </section>
+          ) : null}
+          <RemoteControlPanel
+            scoreLoaded={Boolean(score)}
+            snapshot={snapshot}
+            gotoMeasure={gotoMeasure}
+            setGotoMeasure={setGotoMeasure}
+            loopStartMeasure={loopStartMeasure}
+            setLoopStartMeasure={setLoopStartMeasure}
+            loopEndMeasure={loopEndMeasure}
+            setLoopEndMeasure={setLoopEndMeasure}
+            onTogglePlay={() => playerRef.current?.togglePlayPause()}
+            onBack={() => playerRef.current?.jumpRelativeMeasures(-2)}
+            onForward={() => playerRef.current?.jumpRelativeMeasures(2)}
+            onTempoDown={() => playerRef.current?.adjustTempoPercent(-5)}
+            onTempoUp={() => playerRef.current?.adjustTempoPercent(5)}
+            onGoToMeasure={gotoSelectedMeasure}
+            onStartLoop={setLoopRange}
+            onStopLoop={() => playerRef.current?.clearLoop()}
+            selectedParts={selectedParts}
+            availableCanonicalParts={availableCanonicalParts}
+            onTogglePart={handleTogglePart}
+            onSelectAllParts={handleSetAllParts}
+            largeButtons
+          />
+        </main>
+      </div>
+    );
+  }
+
+  if (isPhoneViewport) {
+    return (
+      <div className="min-h-screen bg-[#16181d] px-4 py-6 text-zinc-100">
+        <main className="mx-auto flex w-full max-w-2xl flex-col gap-5">
+          <header className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
+            <p className="text-xs tracking-[0.14em] text-zinc-300">MOBILE REMOTE • WEBSITE ONLY</p>
+            <h1 className="mt-1 text-2xl font-semibold">Rehearsal Remote</h1>
+            <p className="mt-2 text-zinc-300">
+              m.{snapshot.currentMeasure} | {snapshot.tempoPercent}% |{" "}
+              {snapshot.isPlaying ? "Playing" : "Paused"}
+            </p>
+          </header>
+          <RemoteControlPanel
+            scoreLoaded={Boolean(score)}
+            snapshot={snapshot}
+            gotoMeasure={gotoMeasure}
+            setGotoMeasure={setGotoMeasure}
+            loopStartMeasure={loopStartMeasure}
+            setLoopStartMeasure={setLoopStartMeasure}
+            loopEndMeasure={loopEndMeasure}
+            setLoopEndMeasure={setLoopEndMeasure}
+            onTogglePlay={() => playerRef.current?.togglePlayPause()}
+            onBack={() => playerRef.current?.jumpRelativeMeasures(-2)}
+            onForward={() => playerRef.current?.jumpRelativeMeasures(2)}
+            onTempoDown={() => playerRef.current?.adjustTempoPercent(-5)}
+            onTempoUp={() => playerRef.current?.adjustTempoPercent(5)}
+            onGoToMeasure={gotoSelectedMeasure}
+            onStartLoop={setLoopRange}
+            onStopLoop={() => playerRef.current?.clearLoop()}
+            selectedParts={selectedParts}
+            availableCanonicalParts={availableCanonicalParts}
+            onTogglePart={handleTogglePart}
+            onSelectAllParts={handleSetAllParts}
+            largeButtons
+          />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#16181d] text-zinc-100">
-      <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-4 py-6 sm:px-8">
+      <main className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-8">
         <header className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-          <p className="text-xs tracking-[0.16em] text-zinc-300">MILESTONE 1</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-wide">FILE UPLOAD → OMR → PLAYBACK</h1>
+          <p className="text-xs tracking-[0.16em] text-zinc-300">DIRECTOR VIEW • WEBSITE ONLY</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-wide">Local Web Rehearsal Platform</h1>
           <p className="mt-2 text-zinc-300">{status}</p>
+          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-6">
+            <PanelTab
+              label="Upload Score"
+              active={activePanel === "upload"}
+              onClick={() => setActivePanel("upload")}
+            />
+            <PanelTab
+              label="My Music"
+              active={activePanel === "my-music"}
+              onClick={() => setActivePanel("my-music")}
+            />
+            <PanelTab
+              label="Rehearsal"
+              active={activePanel === "rehearsal"}
+              onClick={() => setActivePanel("rehearsal")}
+            />
+            <PanelTab
+              label="Warmups"
+              active={activePanel === "warmups"}
+              onClick={() => setActivePanel("warmups")}
+            />
+            <PanelTab
+              label="Stations"
+              active={activePanel === "stations"}
+              onClick={() => setActivePanel("stations")}
+            />
+            <PanelTab
+              label="Student/Teacher"
+              active={activePanel === "tools"}
+              onClick={() => setActivePanel("tools")}
+            />
+          </div>
         </header>
 
-        <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-          <h2 className="text-lg font-semibold">Upload</h2>
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <ControlButton
-              label="UPLOAD SCORE"
-              accent
-              onClick={() => uploadInputRef.current?.click()}
-              disabled={isBusy}
-            />
-            <ControlButton
-              label="PROCESS MUSIC"
-              onClick={() => void runRecognition()}
-              disabled={isBusy || !pendingFile}
-            />
-          </div>
-          <input
-            ref={uploadInputRef}
-            className="hidden"
-            type="file"
-            accept=".jpg,.jpeg,.png,.pdf"
-            onChange={(event) => {
-              const file = event.target.files?.[0] ?? null;
-              setPendingFile(file);
-              setError(null);
-              event.currentTarget.value = "";
-            }}
-          />
-          <p className="mt-3 text-sm text-zinc-300">
-            {pendingFile ? pendingFile.name : "[no file selected]"}
-          </p>
-          {isBusy ? <p className="mt-3 text-sm text-cyan-300">PROCESSING MUSIC...</p> : null}
-          {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
-          {diagnostics ? (
-            <div className="mt-3 rounded-xl border border-zinc-600 bg-zinc-900/45 p-3 text-sm">
-              <p className="font-medium">
-                Photo Quality: {diagnostics.lowConfidence ? "Low Confidence" : "Good"}
-              </p>
-              {quality ? (
-                <p className="mt-1 text-zinc-300">
-                  Blur {Math.round(quality.blurScore * 100)}% • Contrast{" "}
-                  {Math.round(quality.contrastScore * 100)}% • Glare{" "}
-                  {Math.round(quality.glareScore * 100)}%
-                </p>
-              ) : null}
+        {activePanel === "upload" ? (
+          <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
+            <h2 className="text-lg font-semibold">Upload Score</h2>
+            <p className="mt-1 text-sm text-zinc-300">
+              Local workflow: Upload file → Process music → Rehearsal playback.
+            </p>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <ControlButton
+                label="UPLOAD SCORE"
+                accent
+                onClick={() => uploadInputRef.current?.click()}
+                disabled={isBusy}
+              />
+              <ControlButton
+                label="PROCESS MUSIC"
+                onClick={() => void runRecognition()}
+                disabled={isBusy || !pendingFile}
+              />
             </div>
-          ) : null}
-        </section>
-
-        <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-          <h2 className="text-lg font-semibold">Playback</h2>
-          <p className="mt-1 text-sm text-zinc-300">
-            m.{snapshot.currentMeasure} • {snapshot.tempoPercent}% •{" "}
-            {snapshot.isPlaying ? "Playing" : "Paused"}
-          </p>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <ControlButton
-              label={snapshot.isPlaying ? "PAUSE" : "PLAY"}
-              accent
-              onClick={() => playerRef.current?.togglePlayPause()}
-              disabled={!score}
-            />
-            <ControlButton
-              label="TEMPO -"
-              onClick={() => playerRef.current?.adjustTempoPercent(-5)}
-              disabled={!score}
-            />
-            <ControlButton
-              label="TEMPO +"
-              onClick={() => playerRef.current?.adjustTempoPercent(5)}
-              disabled={!score}
-            />
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <input
-              className="rounded-xl border border-zinc-600 bg-zinc-900 px-3 py-3"
-              placeholder="GO TO MEASURE"
-              value={gotoMeasure}
-              onChange={(event) => setGotoMeasure(event.target.value)}
+              ref={uploadInputRef}
+              className="hidden"
+              type="file"
+              accept=".jpg,.jpeg,.png,.pdf"
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                setPendingFile(file);
+                setError(null);
+                event.currentTarget.value = "";
+              }}
             />
-            <ControlButton label="GO TO MEASURE" onClick={gotoSelectedMeasure} disabled={!score} />
-          </div>
+            <p className="mt-3 text-sm text-zinc-300">
+              {pendingFile ? pendingFile.name : "[no file selected]"}
+            </p>
+            {isBusy ? <p className="mt-3 text-sm text-cyan-300">PROCESSING MUSIC...</p> : null}
+            {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
+            {diagnostics ? (
+              <div className="mt-3 rounded-xl border border-zinc-600 bg-zinc-900/45 p-3 text-sm">
+                <p className="font-medium">
+                  Photo Quality: {diagnostics.lowConfidence ? "Low Confidence" : "Good"}
+                </p>
+                {quality ? (
+                  <p className="mt-1 text-zinc-300">
+                    Blur {Math.round(quality.blurScore * 100)}% • Contrast{" "}
+                    {Math.round(quality.contrastScore * 100)}% • Glare{" "}
+                    {Math.round(quality.glareScore * 100)}%
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <input
-              className="rounded-xl border border-zinc-600 bg-zinc-900 px-3 py-3"
-              placeholder="LOOP START"
-              value={loopStartMeasure}
-              onChange={(event) => setLoopStartMeasure(event.target.value)}
-            />
-            <input
-              className="rounded-xl border border-zinc-600 bg-zinc-900 px-3 py-3"
-              placeholder="LOOP END"
-              value={loopEndMeasure}
-              onChange={(event) => setLoopEndMeasure(event.target.value)}
-            />
-            <ControlButton label="START LOOP" onClick={setLoopRange} disabled={!score} />
-            <ControlButton
-              label="STOP LOOP"
-              onClick={() => playerRef.current?.clearLoop()}
-              disabled={!score}
-            />
-          </div>
-        </section>
+        {activePanel === "my-music" ? (
+          <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
+            <h2 className="text-lg font-semibold">My Music</h2>
+            <p className="mt-1 text-sm text-zinc-300">
+              Saved from recognized uploads in this same web app.
+            </p>
+            <div className="mt-4 space-y-2">
+              {savedMusic.length ? (
+                savedMusic.slice(0, 20).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => loadSavedScore(item)}
+                    className="w-full rounded-xl bg-zinc-800 px-3 py-3 text-left hover:bg-zinc-700"
+                  >
+                    <p className="font-medium">{item.title}</p>
+                    <p className="text-xs text-zinc-400">
+                      {new Date(item.savedAt).toLocaleString()}
+                    </p>
+                  </button>
+                ))
+              ) : (
+                <p className="text-sm text-zinc-400">No saved scores yet.</p>
+              )}
+            </div>
+          </section>
+        ) : null}
 
-        <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-          <h2 className="text-lg font-semibold">PARTS</h2>
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
-            <ControlButton label="ALL" onClick={handleSetAllParts} disabled={!score} />
-            {PART_BUTTONS.map((part) => {
-              const selected = selectedParts.has(part);
-              const disabled = !availableCanonicalParts.has(part);
-              return (
-                <button
-                  key={part}
-                  type="button"
-                  className={`rounded-xl px-3 py-3 text-sm font-semibold ${
-                    selected
-                      ? "bg-cyan-400 text-black"
-                      : disabled
-                        ? "bg-zinc-800 text-zinc-500"
-                        : "bg-zinc-700 text-zinc-100"
-                  }`}
-                  onClick={() => handleTogglePart(part)}
-                  disabled={disabled}
-                >
-                  {part}
-                </button>
-              );
-            })}
-          </div>
-        </section>
+        {activePanel === "rehearsal" ? (
+          <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
+            <h2 className="text-lg font-semibold">Rehearsal</h2>
+            <p className="mt-1 text-sm text-zinc-300">
+              m.{snapshot.currentMeasure} • {snapshot.tempoPercent}% •{" "}
+              {snapshot.isPlaying ? "Playing" : "Paused"}
+            </p>
+            <RemoteControlPanel
+              scoreLoaded={Boolean(score)}
+              snapshot={snapshot}
+              gotoMeasure={gotoMeasure}
+              setGotoMeasure={setGotoMeasure}
+              loopStartMeasure={loopStartMeasure}
+              setLoopStartMeasure={setLoopStartMeasure}
+              loopEndMeasure={loopEndMeasure}
+              setLoopEndMeasure={setLoopEndMeasure}
+              onTogglePlay={() => playerRef.current?.togglePlayPause()}
+              onBack={() => playerRef.current?.jumpRelativeMeasures(-2)}
+              onForward={() => playerRef.current?.jumpRelativeMeasures(2)}
+              onTempoDown={() => playerRef.current?.adjustTempoPercent(-5)}
+              onTempoUp={() => playerRef.current?.adjustTempoPercent(5)}
+              onGoToMeasure={gotoSelectedMeasure}
+              onStartLoop={setLoopRange}
+              onStopLoop={() => playerRef.current?.clearLoop()}
+              selectedParts={selectedParts}
+              availableCanonicalParts={availableCanonicalParts}
+              onTogglePart={handleTogglePart}
+              onSelectAllParts={handleSetAllParts}
+            />
+            <div className="mt-5 rounded-xl border border-zinc-700 bg-zinc-900/35 p-3">
+              <h3 className="text-sm font-semibold">Detected Parts</h3>
+              <div className="mt-2 space-y-2 text-sm">
+                {voiceDetections.length ? (
+                  voiceDetections.map((part) => (
+                    <div
+                      key={part.id}
+                      className="flex items-center justify-between rounded-lg bg-zinc-800 px-3 py-2"
+                    >
+                      <span>{part.sourceName}</span>
+                      <span className="rounded-full bg-zinc-700 px-3 py-1 text-xs">
+                        {part.canonicalPart}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-zinc-400">No score loaded.</p>
+                )}
+              </div>
+              <p className="mt-2 text-sm text-zinc-300">Measures detected: {measureNumbers.length}</p>
+            </div>
+          </section>
+        ) : null}
 
-        <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-          <h2 className="text-lg font-semibold">Detected Parts</h2>
-          <div className="mt-3 space-y-2 text-sm">
-            {voiceDetections.length ? (
-              voiceDetections.map((part) => (
-                <div key={part.id} className="flex items-center justify-between rounded-xl bg-zinc-800 p-2">
-                  <span>{part.sourceName}</span>
-                  <span className="rounded-full bg-zinc-700 px-3 py-1 text-xs">
-                    {part.canonicalPart}
-                  </span>
-                </div>
-              ))
-            ) : (
-              <p className="text-zinc-400">No score loaded.</p>
-            )}
-          </div>
-          <p className="mt-3 text-sm text-zinc-300">Measures detected: {measureNumbers.length}</p>
-        </section>
+        {activePanel === "warmups" ? (
+          <ComingSoonPanel
+            title="Warmups"
+            message="Warmups will run in this same website (no separate app)."
+          />
+        ) : null}
+
+        {activePanel === "stations" ? (
+          <ComingSoonPanel
+            title="Stations"
+            message="Station links/QR routes will stay inside this web app."
+          />
+        ) : null}
+
+        {activePanel === "tools" ? (
+          <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
+            <h2 className="text-lg font-semibold">Student / Teacher Tools</h2>
+            <p className="mt-1 text-sm text-zinc-300">
+              Student routes use URL/QR in the same project:
+            </p>
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-zinc-200">
+              <li>/ ?mode=station</li>
+              <li>/ ?mode=sectional</li>
+              <li>/ ?mode=solo</li>
+              <li>/ ?mode=checkin</li>
+              <li>/ ?mode=vocal</li>
+            </ul>
+          </section>
+        ) : null}
       </main>
     </div>
   );
@@ -335,16 +564,181 @@ function defaultSelectedPartsFromScore(parsed: ParsedScore) {
   return next;
 }
 
+function PanelTab(props: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      className={`rounded-xl px-3 py-2 text-sm font-semibold ${
+        props.active ? "bg-cyan-400 text-black" : "bg-zinc-700 text-zinc-100"
+      }`}
+    >
+      {props.label}
+    </button>
+  );
+}
+
+function ComingSoonPanel(props: { title: string; message: string }) {
+  return (
+    <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
+      <h2 className="text-lg font-semibold">{props.title}</h2>
+      <p className="mt-2 text-sm text-zinc-300">{props.message}</p>
+    </section>
+  );
+}
+
+function RemoteControlPanel(props: {
+  scoreLoaded: boolean;
+  snapshot: PlaybackSnapshot;
+  gotoMeasure: string;
+  setGotoMeasure: (value: string) => void;
+  loopStartMeasure: string;
+  setLoopStartMeasure: (value: string) => void;
+  loopEndMeasure: string;
+  setLoopEndMeasure: (value: string) => void;
+  onTogglePlay: () => void;
+  onBack: () => void;
+  onForward: () => void;
+  onTempoDown: () => void;
+  onTempoUp: () => void;
+  onGoToMeasure: () => void;
+  onStartLoop: () => void;
+  onStopLoop: () => void;
+  selectedParts: Set<CanonicalPartId>;
+  availableCanonicalParts: Set<CanonicalPartId>;
+  onTogglePart: (part: CanonicalPartId) => void;
+  onSelectAllParts: () => void;
+  largeButtons?: boolean;
+}) {
+  const sizeClasses = props.largeButtons
+    ? "py-5 text-lg font-semibold"
+    : "py-3 text-sm font-semibold";
+
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <ControlButton
+          label={props.snapshot.isPlaying ? "PAUSE" : "PLAY"}
+          accent
+          onClick={props.onTogglePlay}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="BACK 2"
+          onClick={props.onBack}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="FORWARD 2"
+          onClick={props.onForward}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="TEMPO -"
+          onClick={props.onTempoDown}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="TEMPO +"
+          onClick={props.onTempoUp}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <input
+          className={`rounded-xl border border-zinc-600 bg-zinc-900 px-3 ${sizeClasses}`}
+          placeholder="MEASURE"
+          value={props.gotoMeasure}
+          onChange={(event) => props.setGotoMeasure(event.target.value)}
+        />
+        <ControlButton
+          label="GO TO MEASURE"
+          onClick={props.onGoToMeasure}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <input
+          className={`rounded-xl border border-zinc-600 bg-zinc-900 px-3 ${sizeClasses}`}
+          placeholder="LOOP START"
+          value={props.loopStartMeasure}
+          onChange={(event) => props.setLoopStartMeasure(event.target.value)}
+        />
+        <input
+          className={`rounded-xl border border-zinc-600 bg-zinc-900 px-3 ${sizeClasses}`}
+          placeholder="LOOP END"
+          value={props.loopEndMeasure}
+          onChange={(event) => props.setLoopEndMeasure(event.target.value)}
+        />
+        <ControlButton
+          label="START LOOP"
+          onClick={props.onStartLoop}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="STOP LOOP"
+          onClick={props.onStopLoop}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+      </div>
+
+      <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
+        <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">PARTS</p>
+        <div className="grid grid-cols-3 gap-2">
+          <ControlButton
+            label="ALL"
+            onClick={props.onSelectAllParts}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+          {PART_BUTTONS.map((part) => {
+            const selected = props.selectedParts.has(part);
+            const disabled = !props.availableCanonicalParts.has(part);
+            return (
+              <button
+                key={part}
+                type="button"
+                disabled={disabled}
+                onClick={() => props.onTogglePart(part)}
+                className={`rounded-xl px-3 ${sizeClasses} ${
+                  selected
+                    ? "bg-cyan-400 text-black"
+                    : disabled
+                      ? "bg-zinc-800 text-zinc-500"
+                      : "bg-zinc-700 text-zinc-100"
+                }`}
+              >
+                {part}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ControlButton(props: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
   accent?: boolean;
+  large?: boolean;
 }) {
   return (
     <button
       type="button"
-      className={`rounded-xl px-4 py-4 text-base font-semibold ${
+      className={`rounded-xl px-4 ${props.large ? "py-5 text-lg" : "py-4 text-base"} font-semibold ${
         props.accent ? "bg-cyan-400 text-black" : "bg-zinc-700 text-zinc-100"
       } disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500`}
       onClick={props.onClick}
