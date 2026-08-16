@@ -191,41 +191,10 @@ export default function Home() {
     [score]
   );
 
-  useEffect(() => {
-    if (!loadedScoreRecord || !editorPartId) {
-      return;
-    }
-    const selectedMeasure = Number(editorMeasureValue);
-    if (!Number.isFinite(selectedMeasure)) {
-      return;
-    }
-    setMeasureEditorRows(
-      buildEditorRowsFromScore(loadedScoreRecord.parsedScore, editorPartId, selectedMeasure)
-    );
-  }, [editorMeasureValue, editorPartId, loadedScoreRecord]);
-
-  useEffect(() => {
-    if (!loadedScoreRecord) {
-      setAssignmentDraft({});
-      return;
-    }
-    setAssignmentDraft(loadedScoreRecord.directorConfirmedPartAssignments);
-    const hasCurrentReviewPart = loadedScoreRecord.parsedScore.parts.some(
-      (part) => part.canonicalPart === reviewPart
-    );
-    if (!hasCurrentReviewPart) {
-      const fallback = loadedScoreRecord.parsedScore.parts.find(
-        (part) => part.canonicalPart !== "UNKNOWN"
-      );
-      if (fallback) {
-        setReviewPart(fallback.canonicalPart);
-      }
-    }
-  }, [loadedScoreRecord, reviewPart]);
-
   const hydrateFromSavedRecord = useCallback(
     (item: SavedScoreRecord, targetPanel: DirectorPanel) => {
       setLoadedScoreRecord(item);
+      setAssignmentDraft({ ...item.directorConfirmedPartAssignments });
       setSelectedParts(defaultSelectedPartsFromScore(item.parsedScore));
       setScore(item.parsedScore);
       setCurrentScoreId(item.id);
@@ -242,6 +211,10 @@ export default function Home() {
       setBoundaryMeasureValue(String(firstMeasure));
       setEditorMeasureValue(String(firstMeasure));
       setEditorPartId(firstPart);
+      const fallbackPart = item.parsedScore.parts.find((part) => part.canonicalPart !== "UNKNOWN");
+      if (fallbackPart) {
+        setReviewPart(fallbackPart.canonicalPart);
+      }
       setMeasureEditorRows(
         buildEditorRowsFromScore(item.parsedScore, firstPart, firstMeasure)
       );
@@ -407,6 +380,7 @@ export default function Home() {
     if (currentScoreId === item.id) {
       setCurrentScoreId(null);
       setLoadedScoreRecord(null);
+      setAssignmentDraft({});
       setScore(null);
       setDiagnostics(null);
     }
@@ -1054,7 +1028,24 @@ export default function Home() {
                   <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
                     <select
                       value={editorPartId}
-                      onChange={(event) => setEditorPartId(event.target.value)}
+                      onChange={(event) => {
+                        const nextPartId = event.target.value;
+                        setEditorPartId(nextPartId);
+                        if (!loadedScoreRecord) {
+                          return;
+                        }
+                        const selectedMeasure = Number(editorMeasureValue);
+                        if (!Number.isFinite(selectedMeasure)) {
+                          return;
+                        }
+                        setMeasureEditorRows(
+                          buildEditorRowsFromScore(
+                            loadedScoreRecord.parsedScore,
+                            nextPartId,
+                            selectedMeasure
+                          )
+                        );
+                      }}
                       className="rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2 text-sm"
                     >
                       {loadedScoreRecord.parsedScore.parts.map((part) => (
@@ -1065,14 +1056,31 @@ export default function Home() {
                     </select>
                     <input
                       value={editorMeasureValue}
-                      onChange={(event) => setEditorMeasureValue(event.target.value)}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        setEditorMeasureValue(nextValue);
+                        if (!loadedScoreRecord || !editorPartId) {
+                          return;
+                        }
+                        const selectedMeasure = Number(nextValue);
+                        if (!Number.isFinite(selectedMeasure)) {
+                          return;
+                        }
+                        setMeasureEditorRows(
+                          buildEditorRowsFromScore(
+                            loadedScoreRecord.parsedScore,
+                            editorPartId,
+                            selectedMeasure
+                          )
+                        );
+                      }}
                       className="rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2 text-sm"
                       placeholder="Measure number"
                     />
                     <ControlButton label="PLAY THIS MEASURE" onClick={playSelectedMeasure} />
                   </div>
                   <div className="mt-3 space-y-2">
-                    {measureEditorRows.map((row, idx) => (
+                    {measureEditorRows.map((row) => (
                       <div
                         key={row.id}
                         className="grid grid-cols-1 gap-2 rounded-lg border border-zinc-700 bg-zinc-800/80 p-2 sm:grid-cols-[120px_1fr_140px_100px]"
