@@ -39,7 +39,7 @@ export async function POST(
   }
 
   const { uploadsDir } = dataStoragePaths();
-  const replacementPath = path.join(uploadsDir, `${id}.${extension}`);
+  const replacementPath = path.join(/* turbopackIgnore: true */ uploadsDir, `${id}.${extension}`);
   const oldSourcePath = existing.sourceFilePath;
   const replacementMimeType = file.type || existing.sourceMimeType;
 

@@ -32,7 +32,7 @@ export async function POST(request: Request) {
 
   const scoreId = randomUUID();
   const { uploadsDir } = dataStoragePaths();
-  const sourceFilePath = path.join(uploadsDir, `${scoreId}.${extension}`);
+  const sourceFilePath = path.join(/* turbopackIgnore: true */ uploadsDir, `${scoreId}.${extension}`);
   const sourceMimeType = file.type || mimeFromExtension(extension);
 
   try {
