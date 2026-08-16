@@ -33,7 +33,6 @@ const initialSnapshot: PlaybackSnapshot = {
 export default function Home() {
   const [score, setScore] = useState<ParsedScore | null>(null);
   const [diagnostics, setDiagnostics] = useState<OMRDiagnostics | null>(null);
-  const [status, setStatus] = useState("Load a score to begin.");
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<PlaybackSnapshot>(initialSnapshot);
@@ -41,23 +40,24 @@ export default function Home() {
   const [gotoMeasure, setGotoMeasure] = useState("");
   const [loopStart, setLoopStart] = useState("");
   const [loopEnd, setLoopEnd] = useState("");
-  const [savedPieces, setSavedPieces] = useState<SavedPiece[]>([]);
+  const [savedPieces, setSavedPieces] = useState<SavedPiece[]>(() => {
+    if (typeof window === "undefined") {
+      return [];
+    }
+    const raw = localStorage.getItem("choir-my-music-v1");
+    if (!raw) {
+      return [];
+    }
+    try {
+      return JSON.parse(raw) as SavedPiece[];
+    } catch {
+      localStorage.removeItem("choir-my-music-v1");
+      return [];
+    }
+  });
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const playerRef = useRef<ScorePlayer | null>(null);
-
-  useEffect(() => {
-    const raw = localStorage.getItem("choir-my-music-v1");
-    if (!raw) {
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw) as SavedPiece[];
-      setSavedPieces(parsed);
-    } catch {
-      localStorage.removeItem("choir-my-music-v1");
-    }
-  }, []);
 
   useEffect(() => {
     if (!score) {
@@ -67,8 +67,6 @@ export default function Home() {
     playerRef.current?.dispose();
     playerRef.current = player;
     const unsub = player.onUpdate((next) => setSnapshot(next));
-    setSnapshot(player.snapshot());
-    setStatus(`READY TO REHEARSE • ${score.title}`);
     return () => {
       unsub();
       player.dispose();
@@ -111,6 +109,7 @@ export default function Home() {
         if (extension === "xml" || extension === "musicxml") {
           const xml = await file.text();
           const parsed = parseMusicXmlToScore(xml, "musicxml");
+          setSelectedParts(defaultSelectedPartsFromScore(parsed));
           setScore(parsed);
           setDiagnostics(null);
           persistPiece(parsed);
@@ -132,6 +131,7 @@ export default function Home() {
           throw new Error(body.message ?? "Recognition failed.");
         }
         const parsed = parseMusicXmlToScore(body.musicXml, "omr");
+        setSelectedParts(defaultSelectedPartsFromScore(parsed));
         setScore(parsed);
         setDiagnostics(body.diagnostics ?? null);
         persistPiece(parsed);
@@ -148,10 +148,10 @@ export default function Home() {
   const loadPiece = (piece: SavedPiece) => {
     try {
       const parsed = parseMusicXmlToScore(piece.rawMusicXml, piece.sourceType);
+      setSelectedParts(defaultSelectedPartsFromScore(parsed));
       setScore(parsed);
       setDiagnostics(null);
       setError(null);
-      setStatus(`Loaded from MY MUSIC • ${piece.title}`);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "Could not load saved score.";
       setError(message);
@@ -211,22 +211,11 @@ export default function Home() {
 
   const voiceDetections = score?.parts ?? [];
   const quality = diagnostics?.quality;
-
-  useEffect(() => {
-    if (!score) {
-      return;
-    }
-    const next = new Set<CanonicalPartId>();
-    for (const part of score.parts) {
-      if (part.canonicalPart !== "UNKNOWN") {
-        next.add(part.canonicalPart);
-      }
-    }
-    if (!next.size) {
-      next.add("PIANO");
-    }
-    setSelectedParts(next);
-  }, [score]);
+  const status = isBusy
+    ? "Recognizing score..."
+    : score
+      ? `READY TO REHEARSE • ${score.title}`
+      : "Load a score to begin.";
 
   return (
     <div className="min-h-screen bg-[#16181d] text-zinc-100">
@@ -470,6 +459,19 @@ export default function Home() {
       </main>
     </div>
   );
+}
+
+function defaultSelectedPartsFromScore(parsed: ParsedScore) {
+  const next = new Set<CanonicalPartId>();
+  for (const part of parsed.parts) {
+    if (part.canonicalPart !== "UNKNOWN") {
+      next.add(part.canonicalPart);
+    }
+  }
+  if (!next.size) {
+    next.add("PIANO");
+  }
+  return next;
 }
 
 function ControlButton(props: {
