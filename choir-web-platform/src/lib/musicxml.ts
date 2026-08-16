@@ -48,8 +48,6 @@ export function parseMusicXmlToScore(
     };
   });
 
-  autoResolveUnknownParts(parts);
-
   const measureTemplate = readMeasureTemplate(partNodes[0]);
   const measureStartByNumber = new Map<number, number>();
   for (const measure of measureTemplate) {
@@ -67,6 +65,12 @@ export function parseMusicXmlToScore(
       continue;
     }
     processPartNotes(partNode, partMeta, notes, measureStartByNumber);
+  }
+
+  autoResolveUnknownParts(parts, notes);
+  const canonicalByPartId = new Map(parts.map((part) => [part.id, part.canonicalPart]));
+  for (const note of notes) {
+    note.partCanonical = canonicalByPartId.get(note.partId) ?? note.partCanonical;
   }
 
   return {
@@ -361,19 +365,56 @@ function detectCanonicalPart(
   return "UNKNOWN";
 }
 
-function autoResolveUnknownParts(parts: RecognizedPart[]) {
+function autoResolveUnknownParts(parts: RecognizedPart[], notes: NoteEvent[]) {
   const assigned = new Set(parts.map((part) => part.canonicalPart));
   const unknown = parts.filter((part) => part.canonicalPart === "UNKNOWN");
-  const order: CanonicalPartId[] = ["SOPRANO", "ALTO", "TENOR", "BASS"];
+  if (!unknown.length) {
+    return;
+  }
+
+  const midiByPart = new Map<string, number[]>();
+  for (const note of notes) {
+    if (!midiByPart.has(note.partId)) {
+      midiByPart.set(note.partId, []);
+    }
+    midiByPart.get(note.partId)?.push(note.midi);
+  }
+
+  unknown.sort((a, b) => {
+    const aMedian = median(midiByPart.get(a.id) ?? []);
+    const bMedian = median(midiByPart.get(b.id) ?? []);
+    return bMedian - aMedian;
+  });
 
   for (const part of unknown) {
-    const fallback = order.find((candidate) => !assigned.has(candidate));
+    const fallback = pickFallbackByMedian(assigned, midiByPart.get(part.id) ?? []);
     if (!fallback) {
       continue;
     }
     part.canonicalPart = fallback;
     assigned.add(fallback);
   }
+}
+
+function pickFallbackByMedian(
+  assigned: Set<CanonicalPartId>,
+  midiList: number[]
+): CanonicalPartId | null {
+  const med = median(midiList);
+  if (!assigned.has("BASS") && med <= 58) {
+    return "BASS";
+  }
+  if (!assigned.has("TENOR") && med <= 67) {
+    return "TENOR";
+  }
+  if (!assigned.has("ALTO") && med <= 74) {
+    return "ALTO";
+  }
+  if (!assigned.has("SOPRANO")) {
+    return "SOPRANO";
+  }
+  const inOrder: CanonicalPartId[] = ["SOPRANO", "ALTO", "TENOR", "BASS"];
+  return inOrder.find((candidate) => !assigned.has(candidate)) ?? null;
 }
 
 function pitchToMidi(step: string | null, octave: number, alter: number) {
@@ -412,5 +453,13 @@ function textOf(el: Element | null | undefined) {
 function parseIntOr(value: string | null | undefined, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function median(values: number[]) {
+  if (!values.length) {
+    return 64;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
 }
 

@@ -5,14 +5,6 @@ import { parseMusicXmlToScore } from "@/lib/musicxml";
 import { ScorePlayer, type PlaybackSnapshot } from "@/lib/score-player";
 import type { CanonicalPartId, OMRDiagnostics, ParsedScore } from "@/lib/score-types";
 
-type SavedPiece = {
-  id: string;
-  title: string;
-  savedAt: string;
-  rawMusicXml: string;
-  sourceType: "musicxml" | "omr";
-};
-
 const PART_BUTTONS: CanonicalPartId[] = [
   "SOPRANO",
   "ALTO",
@@ -37,24 +29,7 @@ export default function Home() {
   const [isBusy, setIsBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<PlaybackSnapshot>(initialSnapshot);
   const [selectedParts, setSelectedParts] = useState<Set<CanonicalPartId>>(new Set(PART_BUTTONS));
-  const [gotoMeasure, setGotoMeasure] = useState("");
-  const [loopStart, setLoopStart] = useState("");
-  const [loopEnd, setLoopEnd] = useState("");
-  const [savedPieces, setSavedPieces] = useState<SavedPiece[]>(() => {
-    if (typeof window === "undefined") {
-      return [];
-    }
-    const raw = localStorage.getItem("choir-my-music-v1");
-    if (!raw) {
-      return [];
-    }
-    try {
-      return JSON.parse(raw) as SavedPiece[];
-    } catch {
-      localStorage.removeItem("choir-my-music-v1");
-      return [];
-    }
-  });
+  const [gotoMeasure, setGotoMeasure] = useState("1");
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const playerRef = useRef<ScorePlayer | null>(null);
@@ -85,21 +60,6 @@ export default function Home() {
     [score]
   );
 
-  const persistPiece = useCallback((parsed: ParsedScore) => {
-    const newPiece: SavedPiece = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      title: parsed.title,
-      rawMusicXml: parsed.rawMusicXml,
-      sourceType: parsed.sourceType,
-      savedAt: new Date().toISOString(),
-    };
-    setSavedPieces((prev) => {
-      const next = [newPiece, ...prev].slice(0, 25);
-      localStorage.setItem("choir-my-music-v1", JSON.stringify(next));
-      return next;
-    });
-  }, []);
-
   const runRecognition = useCallback(
     async (file: File) => {
       setError(null);
@@ -112,7 +72,6 @@ export default function Home() {
           setSelectedParts(defaultSelectedPartsFromScore(parsed));
           setScore(parsed);
           setDiagnostics(null);
-          persistPiece(parsed);
           return;
         }
 
@@ -134,7 +93,6 @@ export default function Home() {
         setSelectedParts(defaultSelectedPartsFromScore(parsed));
         setScore(parsed);
         setDiagnostics(body.diagnostics ?? null);
-        persistPiece(parsed);
       } catch (caught) {
         const message = caught instanceof Error ? caught.message : "Unknown recognition error.";
         setError(message);
@@ -142,21 +100,8 @@ export default function Home() {
         setIsBusy(false);
       }
     },
-    [persistPiece]
+    []
   );
-
-  const loadPiece = (piece: SavedPiece) => {
-    try {
-      const parsed = parseMusicXmlToScore(piece.rawMusicXml, piece.sourceType);
-      setSelectedParts(defaultSelectedPartsFromScore(parsed));
-      setScore(parsed);
-      setDiagnostics(null);
-      setError(null);
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Could not load saved score.";
-      setError(message);
-    }
-  };
 
   const availableCanonicalParts = useMemo(() => {
     if (!score) {
@@ -200,15 +145,6 @@ export default function Home() {
     playerRef.current?.seekToMeasure(measure);
   };
 
-  const setLoop = () => {
-    const start = Number(loopStart);
-    const end = Number(loopEnd);
-    if (!Number.isFinite(start) || !Number.isFinite(end)) {
-      return;
-    }
-    playerRef.current?.setLoopRange(start, end);
-  };
-
   const voiceDetections = score?.parts ?? [];
   const quality = diagnostics?.quality;
   const status = isBusy
@@ -219,152 +155,85 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[#16181d] text-zinc-100">
-      <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-8">
+      <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-4 py-6 sm:px-8">
         <header className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-          <p className="text-xs tracking-[0.16em] text-zinc-300">CHOIR REHEARSAL PLATFORM</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-wide">Phase 1: Scan → Recognize → Play</h1>
+          <p className="text-xs tracking-[0.16em] text-zinc-300">MILESTONE 1</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-wide">PHOTO → MUSIC → SOUND</h1>
           <p className="mt-2 text-zinc-300">{status}</p>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-            <h2 className="text-lg font-semibold">Score Input</h2>
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                className="rounded-2xl bg-cyan-400 px-5 py-4 text-lg font-semibold text-black"
-                onClick={() => cameraInputRef.current?.click()}
-                disabled={isBusy}
-              >
-                SCAN MUSIC
-              </button>
-              <button
-                type="button"
-                className="rounded-2xl bg-zinc-700 px-5 py-4 text-lg font-semibold"
-                onClick={() => uploadInputRef.current?.click()}
-                disabled={isBusy}
-              >
-                UPLOAD SCORE
-              </button>
-            </div>
-            <input
-              ref={cameraInputRef}
-              className="hidden"
-              type="file"
-              accept="image/png,image/jpeg,image/jpg,image/webp"
-              capture="environment"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) {
-                  void runRecognition(file);
-                }
-                event.currentTarget.value = "";
-              }}
+        <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
+          <h2 className="text-lg font-semibold">Input</h2>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <ControlButton
+              label="SCAN MUSIC"
+              accent
+              onClick={() => cameraInputRef.current?.click()}
+              disabled={isBusy}
             />
-            <input
-              ref={uploadInputRef}
-              className="hidden"
-              type="file"
-              accept=".jpg,.jpeg,.png,.webp,.pdf,.xml,.musicxml"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) {
-                  void runRecognition(file);
-                }
-                event.currentTarget.value = "";
-              }}
+            <ControlButton
+              label="UPLOAD SCORE"
+              onClick={() => uploadInputRef.current?.click()}
+              disabled={isBusy}
             />
-            {isBusy ? <p className="mt-3 text-sm text-cyan-300">Recognizing score...</p> : null}
-            {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
-            {diagnostics ? (
-              <div className="mt-4 rounded-2xl border border-zinc-600 bg-zinc-900/45 p-3 text-sm">
-                <p className="font-medium">
-                  Photo Quality: {diagnostics.lowConfidence ? "Low Confidence" : "Good"}
+          </div>
+          <input
+            ref={cameraInputRef}
+            className="hidden"
+            type="file"
+            accept="image/png,image/jpeg,image/jpg,image/webp"
+            capture="environment"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                void runRecognition(file);
+              }
+              event.currentTarget.value = "";
+            }}
+          />
+          <input
+            ref={uploadInputRef}
+            className="hidden"
+            type="file"
+            accept=".jpg,.jpeg,.png,.webp,.pdf,.xml,.musicxml"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                void runRecognition(file);
+              }
+              event.currentTarget.value = "";
+            }}
+          />
+          {isBusy ? <p className="mt-3 text-sm text-cyan-300">Recognizing score...</p> : null}
+          {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
+          {diagnostics ? (
+            <div className="mt-3 rounded-xl border border-zinc-600 bg-zinc-900/45 p-3 text-sm">
+              <p className="font-medium">
+                Photo Quality: {diagnostics.lowConfidence ? "Low Confidence" : "Good"}
+              </p>
+              {quality ? (
+                <p className="mt-1 text-zinc-300">
+                  Blur {Math.round(quality.blurScore * 100)}% • Contrast{" "}
+                  {Math.round(quality.contrastScore * 100)}% • Glare{" "}
+                  {Math.round(quality.glareScore * 100)}%
                 </p>
-                {quality ? (
-                  <p className="mt-1 text-zinc-300">
-                    Blur {Math.round(quality.blurScore * 100)}% • Contrast{" "}
-                    {Math.round(quality.contrastScore * 100)}% • Glare{" "}
-                    {Math.round(quality.glareScore * 100)}%
-                  </p>
-                ) : null}
-                {diagnostics.warnings.length ? (
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-zinc-300">
-                    {diagnostics.warnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-            <h2 className="text-lg font-semibold">Detected Parts</h2>
-            <div className="mt-3 space-y-2 text-sm">
-              {voiceDetections.length ? (
-                voiceDetections.map((part) => (
-                  <div key={part.id} className="flex items-center justify-between rounded-xl bg-zinc-800 p-2">
-                    <span>{part.sourceName}</span>
-                    <span className="rounded-full bg-zinc-700 px-3 py-1 text-xs">
-                      {part.canonicalPart}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-zinc-400">No score loaded.</p>
-              )}
+              ) : null}
             </div>
-            <h3 className="mt-5 text-sm font-semibold tracking-wide text-zinc-300">MY MUSIC</h3>
-            <div className="mt-2 max-h-40 space-y-2 overflow-auto pr-1">
-              {savedPieces.length ? (
-                savedPieces.map((piece) => (
-                  <button
-                    key={piece.id}
-                    type="button"
-                    className="w-full rounded-xl bg-zinc-800 p-2 text-left hover:bg-zinc-700"
-                    onClick={() => loadPiece(piece)}
-                  >
-                    <p className="text-sm font-medium">{piece.title}</p>
-                    <p className="text-xs text-zinc-400">
-                      {new Date(piece.savedAt).toLocaleString()} • {piece.sourceType}
-                    </p>
-                  </button>
-                ))
-              ) : (
-                <p className="text-sm text-zinc-400">Saved scores will appear here.</p>
-              )}
-            </div>
-          </div>
+          ) : null}
         </section>
 
         <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-          <h2 className="text-lg font-semibold">Rehearsal Remote</h2>
+          <h2 className="text-lg font-semibold">Playback</h2>
           <p className="mt-1 text-sm text-zinc-300">
             m.{snapshot.currentMeasure} • {snapshot.tempoPercent}% •{" "}
             {snapshot.isPlaying ? "Playing" : "Paused"}
           </p>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <ControlButton
               label={snapshot.isPlaying ? "PAUSE" : "PLAY"}
               accent
               onClick={() => playerRef.current?.togglePlayPause()}
-              disabled={!score}
-            />
-            <ControlButton
-              label="BACK 2"
-              onClick={() => playerRef.current?.jumpRelativeMeasures(-2)}
-              disabled={!score}
-            />
-            <ControlButton
-              label="FORWARD 2"
-              onClick={() => playerRef.current?.jumpRelativeMeasures(2)}
-              disabled={!score}
-            />
-            <ControlButton
-              label="STARTING PITCHES"
-              onClick={() => playerRef.current?.playStartingPitches()}
               disabled={!score}
             />
             <ControlButton
@@ -377,34 +246,16 @@ export default function Home() {
               onClick={() => playerRef.current?.adjustTempoPercent(5)}
               disabled={!score}
             />
-            <ControlButton label="SET LOOP" onClick={setLoop} disabled={!score} />
-            <ControlButton
-              label="STOP LOOP"
-              onClick={() => playerRef.current?.clearLoop()}
-              disabled={!score}
-            />
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <input
               className="rounded-xl border border-zinc-600 bg-zinc-900 px-3 py-3"
               placeholder="GO TO MEASURE"
               value={gotoMeasure}
               onChange={(event) => setGotoMeasure(event.target.value)}
             />
-            <ControlButton label="GO" onClick={gotoSelectedMeasure} disabled={!score} />
-            <input
-              className="rounded-xl border border-zinc-600 bg-zinc-900 px-3 py-3"
-              placeholder="LOOP START"
-              value={loopStart}
-              onChange={(event) => setLoopStart(event.target.value)}
-            />
-            <input
-              className="rounded-xl border border-zinc-600 bg-zinc-900 px-3 py-3"
-              placeholder="LOOP END"
-              value={loopEnd}
-              onChange={(event) => setLoopEnd(event.target.value)}
-            />
+            <ControlButton label="GO TO MEASURE" onClick={gotoSelectedMeasure} disabled={!score} />
           </div>
         </section>
 
@@ -437,24 +288,22 @@ export default function Home() {
         </section>
 
         <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-          <h2 className="text-lg font-semibold">MEASURES</h2>
-          <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-10">
-            {measureNumbers.slice(0, 100).map((measure) => (
-              <button
-                key={measure}
-                type="button"
-                className="rounded-lg bg-zinc-700 px-2 py-2 text-sm hover:bg-zinc-600"
-                onClick={() => playerRef.current?.seekToMeasure(measure)}
-              >
-                {measure}
-              </button>
-            ))}
+          <h2 className="text-lg font-semibold">Detected Parts</h2>
+          <div className="mt-3 space-y-2 text-sm">
+            {voiceDetections.length ? (
+              voiceDetections.map((part) => (
+                <div key={part.id} className="flex items-center justify-between rounded-xl bg-zinc-800 p-2">
+                  <span>{part.sourceName}</span>
+                  <span className="rounded-full bg-zinc-700 px-3 py-1 text-xs">
+                    {part.canonicalPart}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p className="text-zinc-400">No score loaded.</p>
+            )}
           </div>
-          {measureNumbers.length > 100 ? (
-            <p className="mt-2 text-xs text-zinc-400">
-              Showing first 100 measures. Use GO TO MEASURE for later measures.
-            </p>
-          ) : null}
+          <p className="mt-3 text-sm text-zinc-300">Measures detected: {measureNumbers.length}</p>
         </section>
       </main>
     </div>
