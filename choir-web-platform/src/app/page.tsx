@@ -52,14 +52,14 @@ export default function Home() {
   const [loopEndMeasure, setLoopEndMeasure] = useState("2");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [savedMusic, setSavedMusic] = useState<SavedScoreSummary[]>([]);
-  const [savedMusicLoading, setSavedMusicLoading] = useState(false);
+  const [savedMusicLoading, setSavedMusicLoading] = useState(true);
   const [currentScoreId, setCurrentScoreId] = useState<string | null>(null);
-  const [pendingTempoPercent, setPendingTempoPercent] = useState<number | null>(null);
   const [replaceTargetId, setReplaceTargetId] = useState<string | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const playerRef = useRef<ScorePlayer | null>(null);
+  const pendingTempoPercentRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -92,9 +92,9 @@ export default function Home() {
     const player = new ScorePlayer(score);
     playerRef.current?.dispose();
     playerRef.current = player;
-    if (pendingTempoPercent != null) {
-      player.setTempoPercent(pendingTempoPercent);
-      setPendingTempoPercent(null);
+    if (pendingTempoPercentRef.current != null) {
+      player.setTempoPercent(pendingTempoPercentRef.current);
+      pendingTempoPercentRef.current = null;
     }
     const unsub = player.onUpdate((next) => setSnapshot(next));
     return () => {
@@ -104,7 +104,7 @@ export default function Home() {
         playerRef.current = null;
       }
     };
-  }, [score, pendingTempoPercent]);
+  }, [score]);
 
   useEffect(() => {
     playerRef.current?.setEnabledCanonicalParts(selectedParts);
@@ -128,8 +128,33 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void refreshSavedMusic();
-  }, [refreshSavedMusic]);
+    let isCancelled = false;
+    void fetch("/api/my-music")
+      .then(async (response) => {
+        const body = (await response.json()) as { items?: SavedScoreSummary[]; message?: string };
+        if (!response.ok) {
+          throw new Error(body.message ?? "Failed to load My Music.");
+        }
+        if (!isCancelled) {
+          setSavedMusic(body.items ?? []);
+        }
+      })
+      .catch((caught) => {
+        if (isCancelled) {
+          return;
+        }
+        const message = caught instanceof Error ? caught.message : "Failed to load My Music.";
+        setError(message);
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setSavedMusicLoading(false);
+        }
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   const measureNumbers = useMemo(
     () => score?.measures.map((measure) => measure.displayNumber) ?? [],
@@ -165,7 +190,7 @@ export default function Home() {
       setScore(body.parsedScore);
       setDiagnostics(body.diagnostics ?? null);
       setCurrentScoreId(body.savedScore.id);
-      setPendingTempoPercent(body.savedScore.lastUsedTempoPercent);
+      pendingTempoPercentRef.current = body.savedScore.lastUsedTempoPercent;
       setFeedbackMessage(body.message ?? "✓ Saved to My Music");
       await refreshSavedMusic();
       setActivePanel("rehearsal");
@@ -188,7 +213,7 @@ export default function Home() {
       setSelectedParts(defaultSelectedPartsFromScore(body.item.parsedScore));
       setScore(body.item.parsedScore);
       setCurrentScoreId(body.item.id);
-      setPendingTempoPercent(body.item.lastUsedTempoPercent);
+      pendingTempoPercentRef.current = body.item.lastUsedTempoPercent;
       setDiagnostics(null);
       setError(null);
       setActivePanel("rehearsal");
