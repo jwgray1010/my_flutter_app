@@ -229,7 +229,7 @@ export class ScorePlayer {
     let offset = 0;
     for (const [part, midi] of firstByPart) {
       this.synthFor(part).triggerAttackRelease(
-        Tone.Frequency(midi, "midi"),
+        Tone.Frequency(midi, "midi").toFrequency(),
         0.7,
         Tone.now() + offset,
         0.85
@@ -293,7 +293,7 @@ export class ScorePlayer {
       const when = now + Math.max(0, offsetBeats * this.secondsPerBeat());
       const durSec = Math.max(0.04, note.durationBeats * this.secondsPerBeat());
       this.synthFor(note.partCanonical).triggerAttackRelease(
-        Tone.Frequency(note.midi, "midi"),
+        Tone.Frequency(note.midi, "midi").toFrequency(),
         durSec,
         when,
         note.velocity
