@@ -13,6 +13,23 @@ export interface RecognizedPart {
   sourceName: string;
   canonicalPart: CanonicalPartId;
   staves: number;
+  /** The underlying MusicXML <part> id this voice was extracted from. */
+  sourcePartId: string;
+  /** The MusicXML <voice> number this entry represents, when the source
+   * part was split because it contains multiple independent voices
+   * sharing one staff (e.g. Soprano+Alto on one staff). Null when the
+   * whole part is a single voice (the common case). */
+  voiceNumber: number | null;
+  /** True when the canonical assignment came from a pitch-based guess
+   * rather than an explicit name/label, so the director should confirm it. */
+  needsConfirmation: boolean;
+  /** Lowest/highest MIDI pitch actually sung/played by this voice, and the
+   * display measure range it appears in - shown to help a director
+   * identify which detected voice is which choir part. */
+  pitchRangeLow: number | null;
+  pitchRangeHigh: number | null;
+  firstMeasureNumber: number | null;
+  lastMeasureNumber: number | null;
 }
 
 export interface NoteEvent {

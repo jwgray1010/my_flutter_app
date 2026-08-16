@@ -1,3 +1,4 @@
+import { populatePartRanges } from "@/lib/musicxml";
 import type {
   AssignablePartId,
   CanonicalPartId,
@@ -47,6 +48,7 @@ export function applyManualCorrections(
     applyMeasurePartEdit(next, edit);
   }
   next.notes.sort((a, b) => a.startBeat - b.startBeat);
+  populatePartRanges(next.parts, next.notes);
   return next;
 }
 
@@ -79,6 +81,9 @@ export function applyPartAssignments(
     const requested = assignments[part.id];
     if (requested) {
       part.canonicalPart = requested === "IGNORE" ? "UNKNOWN" : requested;
+      // A director explicitly chose this mapping, so it's no longer a guess
+      // that needs review - unless they deliberately left it unassigned.
+      part.needsConfirmation = requested === "UNKNOWN";
     }
     partCanonicalMap.set(part.id, part.canonicalPart);
   }

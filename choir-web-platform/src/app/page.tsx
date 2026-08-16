@@ -90,6 +90,8 @@ export default function Home() {
   const [editorMeasureValue, setEditorMeasureValue] = useState("1");
   const [measureEditorRows, setMeasureEditorRows] = useState<MeasureEditorRow[]>([]);
   const [assignmentDraft, setAssignmentDraft] = useState<Record<string, AssignablePartId>>({});
+  const [startingMeasureValue, setStartingMeasureValue] = useState("1");
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const playerRef = useRef<ScorePlayer | null>(null);
@@ -220,6 +222,8 @@ export default function Home() {
       setBoundaryMeasureValue(String(firstMeasure));
       setEditorMeasureValue(String(firstMeasure));
       setEditorPartId(firstPart);
+      setStartingMeasureValue(String(firstMeasure));
+      setShowTechnicalDetails(false);
       const fallbackPart = item.parsedScore.parts.find((part) => part.canonicalPart !== "UNKNOWN");
       if (fallbackPart) {
         setReviewPart(fallbackPart.canonicalPart);
@@ -540,6 +544,33 @@ export default function Home() {
     }
     hydrateFromSavedRecord(body.item, "check-score");
     setFeedbackMessage("Measure numbering updated.");
+  };
+
+  const saveStartingMeasure = async () => {
+    if (!currentScoreId || !loadedScoreRecord) {
+      return;
+    }
+    const firstMeasure = loadedScoreRecord.parsedScore.measures[0];
+    const shouldBe = Number(startingMeasureValue);
+    if (!firstMeasure || !Number.isFinite(shouldBe)) {
+      return;
+    }
+    const response = await fetch(`/api/my-music/${currentScoreId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "setMeasureNumberAnchor",
+        internalIndex: firstMeasure.internalIndex,
+        displayNumber: Math.round(shouldBe),
+      }),
+    });
+    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    if (!response.ok || !body.item) {
+      setError(body.message ?? "Could not save starting measure.");
+      return;
+    }
+    hydrateFromSavedRecord(body.item, "review");
+    setFeedbackMessage("Starting measure updated.");
   };
 
   const saveBoundaryFlag = async () => {
@@ -921,50 +952,84 @@ export default function Home() {
 
         {activePanel === "review" ? (
           <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-            <h2 className="text-xl font-semibold">Ready to Rehearse</h2>
+            <h2 className="text-xl font-semibold">Recognition Review</h2>
             {loadedScoreRecord ? (
               <>
-                <p className="mt-2 text-sm text-zinc-300">
-                  {loadedScoreRecord.title} • {loadedScoreRecord.partTextureLabel}
-                </p>
+                <p className="mt-2 text-sm text-zinc-300">{loadedScoreRecord.title}</p>
+
                 <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-900/40 p-4">
-                  <p className="text-sm font-semibold text-zinc-200">Detected:</p>
-                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <p className="text-sm font-semibold text-zinc-200">
+                    Measures: {measureRangeLabel(loadedScoreRecord.parsedScore)}
+                  </p>
+                  <p className="mt-1 text-sm text-zinc-300">
+                    Choir: {choirFormatLabel(loadedScoreRecord.parsedScore)}
+                  </p>
+                  <p className="mt-1 text-sm text-zinc-300">
+                    Piano: {pianoStatusLabel(loadedScoreRecord.parsedScore)}
+                  </p>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {PART_BUTTONS.map((part) => {
-                      const found = loadedScoreRecord.parsedScore.parts.some(
+                      const detected = loadedScoreRecord.parsedScore.parts.filter(
                         (item) => item.canonicalPart === part
                       );
+                      const uncertain = detected.some((item) => item.needsConfirmation);
+                      const found = detected.length > 0;
                       return (
                         <p key={part} className="text-sm">
-                          {found ? "✓" : "•"} {labelPart(part)}
+                          {uncertain ? "⚠" : found ? "✓" : "—"} {labelPart(part)}
+                          {uncertain ? " (needs confirmation)" : ""}
                         </p>
                       );
                     })}
                   </div>
-                  <p className="mt-3 text-sm text-zinc-300">
-                    Measures: {measureRangeLabel(loadedScoreRecord.parsedScore)}
+                </div>
+
+                <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-900/40 p-4">
+                  <p className="text-sm font-semibold text-zinc-200">What measure does this page start with?</p>
+                  <p className="mt-1 text-xs text-zinc-400">
+                    Leave as-is if this page begins the piece. If this is a later page (e.g. page 2),
+                    enter the actual measure number the first recognized measure represents.
                   </p>
+                  <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                    <input
+                      value={startingMeasureValue}
+                      onChange={(event) => setStartingMeasureValue(event.target.value.replace(/[^0-9]/g, ""))}
+                      inputMode="numeric"
+                      className="rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2 text-lg font-semibold"
+                    />
+                    <ControlButton label="SET STARTING MEASURE" onClick={() => void saveStartingMeasure()} />
+                  </div>
                 </div>
 
                 {loadedScoreRecord.recognitionWarnings.length ? (
                   <div className="mt-4 rounded-xl border border-amber-700 bg-amber-950/30 p-4">
                     <p className="text-sm font-semibold text-amber-200">
-                      Recognition warnings
+                      We had trouble reading part of this page.
                     </p>
-                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-100">
-                      {loadedScoreRecord.recognitionWarnings.slice(0, 8).map((warning) => (
-                        <li key={warning}>{warning}</li>
-                      ))}
-                    </ul>
+                    <button
+                      type="button"
+                      onClick={() => setShowTechnicalDetails((prev) => !prev)}
+                      className="mt-2 text-xs font-semibold text-amber-300 underline"
+                    >
+                      {showTechnicalDetails ? "Hide technical details" : "Show technical details"}
+                    </button>
+                    {showTechnicalDetails ? (
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-100">
+                        {loadedScoreRecord.recognitionWarnings.slice(0, 12).map((warning) => (
+                          <li key={warning}>{warning}</li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 ) : null}
 
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <ControlButton
                     label={loadedScoreRecord.recognitionWarnings.length ? "REHEARSE ANYWAY" : "REHEARSE"}
                     accent
                     onClick={() => setActivePanel("rehearsal")}
                   />
+                  <ControlButton label="IDENTIFY PARTS" onClick={() => setActivePanel("check-score")} />
                   <ControlButton label="CHECK SCORE" onClick={() => setActivePanel("check-score")} />
                 </div>
               </>
@@ -1002,36 +1067,57 @@ export default function Home() {
                 </div>
 
                 <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-4">
-                  <p className="text-sm font-semibold text-zinc-200">Part assignment</p>
-                  <div className="mt-2 space-y-2">
-                    {loadedScoreRecord.parsedScore.parts.map((part) => (
-                      <div key={part.id} className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_180px]">
-                        <p className="rounded-lg bg-zinc-800 px-3 py-2 text-sm">
-                          {part.sourceName}
-                        </p>
-                        <select
-                          value={assignmentDraft[part.id] ?? part.canonicalPart}
-                          onChange={(event) =>
-                            setAssignmentDraft((prev) => ({
-                              ...prev,
-                              [part.id]: event.target.value as AssignablePartId,
-                            }))
-                          }
-                          className="rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2 text-sm"
+                  <p className="text-sm font-semibold text-zinc-200">Identify Parts</p>
+                  <p className="mt-1 text-xs text-zinc-400">
+                    Tell Rehearsal Keys which choir part each detected voice is. You only need to do
+                    this once — it will be remembered and followed automatically. A part does not
+                    need to start in the first measure; use the pitch/measure hints below to tell
+                    voices apart.
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {loadedScoreRecord.parsedScore.parts.map((part) => {
+                      const hint = partIdentityHint(part);
+                      const flagged = part.needsConfirmation || part.canonicalPart === "UNKNOWN";
+                      return (
+                        <div
+                          key={part.id}
+                          className={`grid grid-cols-1 gap-2 rounded-lg border p-2 sm:grid-cols-[1fr_180px] ${
+                            flagged ? "border-amber-600 bg-amber-950/20" : "border-zinc-700 bg-zinc-800"
+                          }`}
                         >
-                          <option value="SOPRANO">Soprano</option>
-                          <option value="ALTO">Alto</option>
-                          <option value="TENOR">Tenor</option>
-                          <option value="BASS">Bass</option>
-                          <option value="PIANO">Piano</option>
-                          <option value="IGNORE">Ignore</option>
-                        </select>
-                      </div>
-                    ))}
+                          <div className="px-1 py-1">
+                            <p className="text-sm">
+                              {flagged ? "⚠ " : ""}
+                              {part.sourceName}
+                            </p>
+                            {hint ? <p className="text-xs text-zinc-400">{hint}</p> : null}
+                          </div>
+                          <select
+                            value={assignmentDraft[part.id] ?? part.canonicalPart}
+                            onChange={(event) =>
+                              setAssignmentDraft((prev) => ({
+                                ...prev,
+                                [part.id]: event.target.value as AssignablePartId,
+                              }))
+                            }
+                            className="rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2 text-sm"
+                          >
+                            <option value="SOPRANO">Soprano</option>
+                            <option value="ALTO">Alto</option>
+                            <option value="TENOR">Tenor</option>
+                            <option value="BASS">Bass</option>
+                            <option value="PIANO">Piano</option>
+                            <option value="UNKNOWN">Unassigned</option>
+                            <option value="IGNORE">Ignore</option>
+                          </select>
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="mt-3">
                     <ControlButton
                       label="SAVE PART ASSIGNMENT"
+                      accent
                       onClick={() => void savePartAssignments(assignmentDraft)}
                     />
                   </div>
@@ -1395,6 +1481,50 @@ function measureRangeLabel(score: ParsedScore) {
   const start = score.measures[0].displayNumber;
   const end = score.measures[score.measures.length - 1].displayNumber;
   return `${start}–${end}`;
+}
+
+function choirFormatLabel(score: ParsedScore) {
+  const vocalParts = new Set(
+    score.parts
+      .filter((part) => part.canonicalPart !== "PIANO" && part.canonicalPart !== "UNKNOWN")
+      .map((part) => part.canonicalPart)
+  );
+  if (!vocalParts.size) {
+    return "Unknown";
+  }
+  const order: CanonicalPartId[] = ["SOPRANO", "ALTO", "TENOR", "BASS"];
+  const initials: Record<string, string> = {
+    SOPRANO: "S",
+    ALTO: "A",
+    TENOR: "T",
+    BASS: "B",
+  };
+  return order
+    .filter((part) => vocalParts.has(part))
+    .map((part) => initials[part])
+    .join("");
+}
+
+function pianoStatusLabel(score: ParsedScore): "Detected" | "Not Detected" | "Needs Confirmation" {
+  const pianoParts = score.parts.filter((part) => part.canonicalPart === "PIANO");
+  if (!pianoParts.length) {
+    return "Not Detected";
+  }
+  if (pianoParts.some((part) => part.needsConfirmation)) {
+    return "Needs Confirmation";
+  }
+  return "Detected";
+}
+
+function partIdentityHint(part: ParsedScore["parts"][number]) {
+  const bits: string[] = [];
+  if (part.pitchRangeLow != null && part.pitchRangeHigh != null) {
+    bits.push(`pitch ${midiToPitchName(part.pitchRangeLow)}–${midiToPitchName(part.pitchRangeHigh)}`);
+  }
+  if (part.firstMeasureNumber != null && part.lastMeasureNumber != null) {
+    bits.push(`measures ${part.firstMeasureNumber}–${part.lastMeasureNumber}`);
+  }
+  return bits.join(" • ");
 }
 
 function buildEditorRowsFromScore(

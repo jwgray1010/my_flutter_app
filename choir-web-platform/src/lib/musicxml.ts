@@ -36,18 +36,6 @@ export function parseMusicXmlToScore(
     throw new Error("Invalid MusicXML: no parts found.");
   }
 
-  const parts: RecognizedPart[] = partNodes.map((partNode, idx) => {
-    const id = partNode.getAttribute("id") ?? `P${idx + 1}`;
-    const sourceName = partNameById.get(id) ?? `Part ${idx + 1}`;
-    const staves = estimatePartStaves(partNode);
-    return {
-      id,
-      sourceName,
-      canonicalPart: detectCanonicalPart(sourceName, idx, partNodes.length, staves),
-      staves,
-    };
-  });
-
   const measureTemplate = readMeasureTemplate(partNodes[0]);
   const measureStartByNumber = new Map<number, number>();
   for (const measure of measureTemplate) {
@@ -57,21 +45,79 @@ export function parseMusicXmlToScore(
   const suggestedTempoBpm = readTempoHint(partNodes[0]) ?? 88;
   const keySignature = readKeySignature(partNodes[0]);
   const notes: NoteEvent[] = [];
+  const parts: RecognizedPart[] = [];
 
-  for (const partNode of partNodes) {
-    const partId = partNode.getAttribute("id") ?? "";
-    const partMeta = parts.find((part) => part.id === partId);
-    if (!partMeta) {
-      continue;
+  partNodes.forEach((partNode, idx) => {
+    const sourcePartId = partNode.getAttribute("id") ?? `P${idx + 1}`;
+    const sourceName = partNameById.get(sourcePartId) ?? `Part ${idx + 1}`;
+    const staves = estimatePartStaves(partNode);
+    const isLikelyPiano =
+      staves >= 2 || /piano|accomp|keyboard|organ/i.test(sourceName);
+
+    const voiceGroups = isLikelyPiano ? null : detectSubstantiveVoices(partNode);
+
+    if (!voiceGroups || voiceGroups.length <= 1) {
+      // Single voice (or piano grand staff kept as one group): preserve the
+      // simple, backward-compatible behavior of one RecognizedPart per part.
+      const detected = detectCanonicalPart(sourceName, idx, partNodes.length, staves);
+      const partMeta: RecognizedPart = {
+        id: sourcePartId,
+        sourceName,
+        canonicalPart: detected.canonicalPart,
+        staves,
+        sourcePartId,
+        voiceNumber: null,
+        needsConfirmation: !detected.confident,
+        pitchRangeLow: null,
+        pitchRangeHigh: null,
+        firstMeasureNumber: null,
+        lastMeasureNumber: null,
+      };
+      parts.push(partMeta);
+      processPartNotes(partNode, () => partMeta, notes, measureStartByNumber);
+      return;
     }
-    processPartNotes(partNode, partMeta, notes, measureStartByNumber);
-  }
+
+    // Multiple substantive voices share this single staff (e.g. Soprano+Alto
+    // on one staff). Split into one RecognizedPart per voice so each can be
+    // isolated during rehearsal, instead of treating the whole staff as one
+    // undifferentiated part.
+    const namedRoles = detectPairedVoiceNames(sourceName, voiceGroups.length);
+    const voiceParts = new Map<number, RecognizedPart>();
+    voiceGroups.forEach((group, voiceIdx) => {
+      const id = `${sourcePartId}:v${group.voiceNumber}`;
+      const roleFromName = namedRoles?.[voiceIdx] ?? null;
+      voiceParts.set(group.voiceNumber, {
+        id,
+        sourceName: `${sourceName} (voice ${group.voiceNumber})`,
+        canonicalPart: roleFromName ?? "UNKNOWN",
+        staves,
+        sourcePartId,
+        voiceNumber: group.voiceNumber,
+        needsConfirmation: roleFromName == null,
+        pitchRangeLow: null,
+        pitchRangeHigh: null,
+        firstMeasureNumber: null,
+        lastMeasureNumber: null,
+      });
+    });
+    for (const partMeta of voiceParts.values()) {
+      parts.push(partMeta);
+    }
+    processPartNotes(
+      partNode,
+      (voiceNumber) => voiceParts.get(voiceNumber) ?? voiceParts.values().next().value ?? null,
+      notes,
+      measureStartByNumber
+    );
+  });
 
   autoResolveUnknownParts(parts, notes);
   const canonicalByPartId = new Map(parts.map((part) => [part.id, part.canonicalPart]));
   for (const note of notes) {
     note.partCanonical = canonicalByPartId.get(note.partId) ?? note.partCanonical;
   }
+  populatePartRanges(parts, notes);
 
   return {
     title: scoreTitle || "Untitled score",
@@ -86,9 +132,112 @@ export function parseMusicXmlToScore(
   };
 }
 
+interface VoiceGroup {
+  voiceNumber: number;
+  noteCount: number;
+  measureCount: number;
+}
+
+/**
+ * Finds voice numbers within a part that carry real, independent melodic
+ * content (as opposed to a stray voice=2 used once for an engraving quirk).
+ * Returns null/[] when the part should be treated as a single voice.
+ */
+function detectSubstantiveVoices(partNode: Element): VoiceGroup[] | null {
+  const measures = elementChildrenByTag(partNode, "measure");
+  const stats = new Map<number, { noteCount: number; measures: Set<number> }>();
+
+  measures.forEach((measure, idx) => {
+    const measureNumber = parseIntOr(measure.getAttribute("number"), idx + 1);
+    const noteNodes = elementChildrenByTag(measure, "note");
+    for (const noteNode of noteNodes) {
+      if (noteNode.querySelector("rest") != null) {
+        continue;
+      }
+      if (noteNode.querySelector("pitch") == null) {
+        continue;
+      }
+      const voiceNumber = parseIntOr(textOf(noteNode.querySelector("voice")), 1);
+      if (!stats.has(voiceNumber)) {
+        stats.set(voiceNumber, { noteCount: 0, measures: new Set() });
+      }
+      const entry = stats.get(voiceNumber);
+      if (entry) {
+        entry.noteCount += 1;
+        entry.measures.add(measureNumber);
+      }
+    }
+  });
+
+  const MIN_NOTES = 3;
+  const MIN_MEASURES = 2;
+  const groups: VoiceGroup[] = Array.from(stats.entries())
+    .map(([voiceNumber, entry]) => ({
+      voiceNumber,
+      noteCount: entry.noteCount,
+      measureCount: entry.measures.size,
+    }))
+    .filter((group) => group.noteCount >= MIN_NOTES && group.measureCount >= MIN_MEASURES)
+    .sort((a, b) => a.voiceNumber - b.voiceNumber);
+
+  return groups.length >= 2 ? groups : null;
+}
+
+/**
+ * If a shared-staff part is explicitly labeled with two role names
+ * (e.g. "Soprano/Alto", "S/A", "Tenor Bass", "T. B."), map each detected
+ * voice (in ascending voice-number order, which by MusicXML/engraving
+ * convention places the higher voice first) to its named role.
+ * Returns null when the name doesn't clearly identify multiple roles.
+ */
+function detectPairedVoiceNames(sourceName: string, voiceCount: number): (CanonicalPartId | null)[] | null {
+  const normalized = sourceName.toLowerCase().replace(/[.\s]+/g, " ").trim();
+  const pairs: Array<{ pattern: RegExp; roles: CanonicalPartId[] }> = [
+    { pattern: /soprano.*alto|s\s*\/\s*a\b|^s a$|^sa$/, roles: ["SOPRANO", "ALTO"] },
+    { pattern: /tenor.*bass|t\s*\/\s*b\b|^t b$|^tb$/, roles: ["TENOR", "BASS"] },
+    { pattern: /soprano.*soprano|s\s*\/\s*s\b/, roles: ["SOPRANO", "SOPRANO"] },
+    { pattern: /alto.*alto/, roles: ["ALTO", "ALTO"] },
+    { pattern: /tenor.*tenor/, roles: ["TENOR", "TENOR"] },
+    { pattern: /bass.*bass/, roles: ["BASS", "BASS"] },
+  ];
+  for (const { pattern, roles } of pairs) {
+    if (pattern.test(normalized) && roles.length === voiceCount) {
+      return roles;
+    }
+  }
+  return null;
+}
+
+export function populatePartRanges(parts: RecognizedPart[], notes: NoteEvent[]) {
+  for (const part of parts) {
+    const partNotes = notes.filter((note) => note.partId === part.id);
+    if (!partNotes.length) {
+      part.pitchRangeLow = null;
+      part.pitchRangeHigh = null;
+      part.firstMeasureNumber = null;
+      part.lastMeasureNumber = null;
+      continue;
+    }
+    let low = Infinity;
+    let high = -Infinity;
+    let firstMeasure = Infinity;
+    let lastMeasure = -Infinity;
+    for (const note of partNotes) {
+      low = Math.min(low, note.midi);
+      high = Math.max(high, note.midi);
+      firstMeasure = Math.min(firstMeasure, note.measureNumber);
+      lastMeasure = Math.max(lastMeasure, note.measureNumber);
+    }
+    part.pitchRangeLow = Number.isFinite(low) ? low : null;
+    part.pitchRangeHigh = Number.isFinite(high) ? high : null;
+    part.firstMeasureNumber = Number.isFinite(firstMeasure) ? firstMeasure : null;
+    part.lastMeasureNumber = Number.isFinite(lastMeasure) ? lastMeasure : null;
+  }
+}
+
 function processPartNotes(
   partNode: Element,
-  partMeta: RecognizedPart,
+  resolvePartForVoice: (voiceNumber: number) => RecognizedPart | null,
   notes: NoteEvent[],
   measureStartByNumber: Map<number, number>
 ) {
@@ -143,6 +292,11 @@ function processPartNotes(
         parseIntOr(textOf(pitch.querySelector("alter")), 0)
       );
       if (midi == null) {
+        continue;
+      }
+      const voiceNumber = parseIntOr(textOf(child.querySelector("voice")), 1);
+      const partMeta = resolvePartForVoice(voiceNumber);
+      if (!partMeta) {
         continue;
       }
       const measureStart = measureStartByNumber.get(measureNumber) ?? (measureNumber - 1) * 4;
@@ -341,19 +495,19 @@ function detectCanonicalPart(
   index: number,
   total: number,
   staves: number
-): CanonicalPartId {
+): { canonicalPart: CanonicalPartId; confident: boolean } {
   const normalized = sourceName.toLowerCase();
   if (normalized.includes("soprano") || normalized === "s" || normalized === "sop.") {
-    return "SOPRANO";
+    return { canonicalPart: "SOPRANO", confident: true };
   }
   if (normalized.includes("alto") || normalized === "a" || normalized === "alto.") {
-    return "ALTO";
+    return { canonicalPart: "ALTO", confident: true };
   }
   if (normalized.includes("tenor") || normalized === "t" || normalized === "ten.") {
-    return "TENOR";
+    return { canonicalPart: "TENOR", confident: true };
   }
   if (normalized.includes("bass") || normalized === "b" || normalized === "bs.") {
-    return "BASS";
+    return { canonicalPart: "BASS", confident: true };
   }
   if (
     normalized.includes("piano") ||
@@ -361,12 +515,17 @@ function detectCanonicalPart(
     normalized.includes("keyboard") ||
     staves >= 2
   ) {
-    return "PIANO";
+    return { canonicalPart: "PIANO", confident: true };
   }
   if (total === 4) {
-    return (["SOPRANO", "ALTO", "TENOR", "BASS"][index] as CanonicalPartId) ?? "UNKNOWN";
+    // Positional guess only (e.g. generic "Voice 1..4" parts) - not a
+    // confirmed identification, the director should verify it.
+    return {
+      canonicalPart: (["SOPRANO", "ALTO", "TENOR", "BASS"][index] as CanonicalPartId) ?? "UNKNOWN",
+      confident: false,
+    };
   }
-  return "UNKNOWN";
+  return { canonicalPart: "UNKNOWN", confident: false };
 }
 
 function autoResolveUnknownParts(parts: RecognizedPart[], notes: NoteEvent[]) {
@@ -396,6 +555,7 @@ function autoResolveUnknownParts(parts: RecognizedPart[], notes: NoteEvent[]) {
       continue;
     }
     part.canonicalPart = fallback;
+    part.needsConfirmation = true;
     assigned.add(fallback);
   }
 }
