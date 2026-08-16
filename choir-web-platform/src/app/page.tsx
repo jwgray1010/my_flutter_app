@@ -30,7 +30,9 @@ export default function Home() {
   const [snapshot, setSnapshot] = useState<PlaybackSnapshot>(initialSnapshot);
   const [selectedParts, setSelectedParts] = useState<Set<CanonicalPartId>>(new Set(PART_BUTTONS));
   const [gotoMeasure, setGotoMeasure] = useState("1");
-  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const [loopStartMeasure, setLoopStartMeasure] = useState("1");
+  const [loopEndMeasure, setLoopEndMeasure] = useState("2");
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const playerRef = useRef<ScorePlayer | null>(null);
 
@@ -60,48 +62,40 @@ export default function Home() {
     [score]
   );
 
-  const runRecognition = useCallback(
-    async (file: File) => {
-      setError(null);
-      setIsBusy(true);
-      try {
-        const extension = file.name.toLowerCase().split(".").pop();
-        if (extension === "xml" || extension === "musicxml") {
-          const xml = await file.text();
-          const parsed = parseMusicXmlToScore(xml, "musicxml");
-          setSelectedParts(defaultSelectedPartsFromScore(parsed));
-          setScore(parsed);
-          setDiagnostics(null);
-          return;
-        }
-
-        const formData = new FormData();
-        formData.append("file", file);
-        const response = await fetch("/api/score/recognize", {
-          method: "POST",
-          body: formData,
-        });
-        const body = (await response.json()) as {
-          musicXml?: string;
-          diagnostics?: OMRDiagnostics;
-          message?: string;
-        };
-        if (!response.ok || !body.musicXml) {
-          throw new Error(body.message ?? "Recognition failed.");
-        }
-        const parsed = parseMusicXmlToScore(body.musicXml, "omr");
-        setSelectedParts(defaultSelectedPartsFromScore(parsed));
-        setScore(parsed);
-        setDiagnostics(body.diagnostics ?? null);
-      } catch (caught) {
-        const message = caught instanceof Error ? caught.message : "Unknown recognition error.";
-        setError(message);
-      } finally {
-        setIsBusy(false);
+  const runRecognition = useCallback(async () => {
+    if (!pendingFile) {
+      return;
+    }
+    const file = pendingFile;
+    setPendingFile(null);
+    setError(null);
+    setIsBusy(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/score/recognize", {
+        method: "POST",
+        body: formData,
+      });
+      const body = (await response.json()) as {
+        musicXml?: string;
+        diagnostics?: OMRDiagnostics;
+        message?: string;
+      };
+      if (!response.ok || !body.musicXml) {
+        throw new Error(body.message ?? "Recognition failed.");
       }
-    },
-    []
-  );
+      const parsed = parseMusicXmlToScore(body.musicXml, "omr");
+      setSelectedParts(defaultSelectedPartsFromScore(parsed));
+      setScore(parsed);
+      setDiagnostics(body.diagnostics ?? null);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Unknown recognition error.";
+      setError(message);
+    } finally {
+      setIsBusy(false);
+    }
+  }, [pendingFile]);
 
   const availableCanonicalParts = useMemo(() => {
     if (!score) {
@@ -145,66 +139,63 @@ export default function Home() {
     playerRef.current?.seekToMeasure(measure);
   };
 
+  const setLoopRange = () => {
+    const start = Number(loopStartMeasure);
+    const end = Number(loopEndMeasure);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return;
+    }
+    playerRef.current?.setLoopRange(start, end);
+  };
+
   const voiceDetections = score?.parts ?? [];
   const quality = diagnostics?.quality;
   const status = isBusy
-    ? "Recognizing score..."
+    ? "PROCESSING MUSIC..."
     : score
-      ? `READY TO REHEARSE • ${score.title}`
-      : "Load a score to begin.";
+      ? "READY TO REHEARSE"
+      : "UPLOAD SCORE";
 
   return (
     <div className="min-h-screen bg-[#16181d] text-zinc-100">
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-4 py-6 sm:px-8">
         <header className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
           <p className="text-xs tracking-[0.16em] text-zinc-300">MILESTONE 1</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-wide">PHOTO → MUSIC → SOUND</h1>
+          <h1 className="mt-1 text-2xl font-semibold tracking-wide">FILE UPLOAD → OMR → PLAYBACK</h1>
           <p className="mt-2 text-zinc-300">{status}</p>
         </header>
 
         <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
-          <h2 className="text-lg font-semibold">Input</h2>
+          <h2 className="text-lg font-semibold">Upload</h2>
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <ControlButton
-              label="SCAN MUSIC"
-              accent
-              onClick={() => cameraInputRef.current?.click()}
-              disabled={isBusy}
-            />
-            <ControlButton
               label="UPLOAD SCORE"
+              accent
               onClick={() => uploadInputRef.current?.click()}
               disabled={isBusy}
             />
+            <ControlButton
+              label="PROCESS MUSIC"
+              onClick={() => void runRecognition()}
+              disabled={isBusy || !pendingFile}
+            />
           </div>
-          <input
-            ref={cameraInputRef}
-            className="hidden"
-            type="file"
-            accept="image/png,image/jpeg,image/jpg,image/webp"
-            capture="environment"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) {
-                void runRecognition(file);
-              }
-              event.currentTarget.value = "";
-            }}
-          />
           <input
             ref={uploadInputRef}
             className="hidden"
             type="file"
-            accept=".jpg,.jpeg,.png,.webp,.pdf,.xml,.musicxml"
+            accept=".jpg,.jpeg,.png,.pdf"
             onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) {
-                void runRecognition(file);
-              }
+              const file = event.target.files?.[0] ?? null;
+              setPendingFile(file);
+              setError(null);
               event.currentTarget.value = "";
             }}
           />
-          {isBusy ? <p className="mt-3 text-sm text-cyan-300">Recognizing score...</p> : null}
+          <p className="mt-3 text-sm text-zinc-300">
+            {pendingFile ? pendingFile.name : "[no file selected]"}
+          </p>
+          {isBusy ? <p className="mt-3 text-sm text-cyan-300">PROCESSING MUSIC...</p> : null}
           {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
           {diagnostics ? (
             <div className="mt-3 rounded-xl border border-zinc-600 bg-zinc-900/45 p-3 text-sm">
@@ -256,6 +247,27 @@ export default function Home() {
               onChange={(event) => setGotoMeasure(event.target.value)}
             />
             <ControlButton label="GO TO MEASURE" onClick={gotoSelectedMeasure} disabled={!score} />
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <input
+              className="rounded-xl border border-zinc-600 bg-zinc-900 px-3 py-3"
+              placeholder="LOOP START"
+              value={loopStartMeasure}
+              onChange={(event) => setLoopStartMeasure(event.target.value)}
+            />
+            <input
+              className="rounded-xl border border-zinc-600 bg-zinc-900 px-3 py-3"
+              placeholder="LOOP END"
+              value={loopEndMeasure}
+              onChange={(event) => setLoopEndMeasure(event.target.value)}
+            />
+            <ControlButton label="START LOOP" onClick={setLoopRange} disabled={!score} />
+            <ControlButton
+              label="STOP LOOP"
+              onClick={() => playerRef.current?.clearLoop()}
+              disabled={!score}
+            />
           </div>
         </section>
 
