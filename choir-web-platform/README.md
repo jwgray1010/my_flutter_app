@@ -47,7 +47,30 @@ The same URL serves multiple contexts:
   - Loop range set/clear
   - Part isolation (S/A/T/B/Piano combinations)
 - Photo quality diagnostics (blur/contrast/glare/perspective warning hints)
-- Local `MY MUSIC` storage using browser localStorage
+- Persistent `MY MUSIC` storage using local SQLite + file assets
+  - Auto-save after successful OMR/parse (`✓ Saved to My Music`)
+  - Rehearse from saved data without re-running OMR
+  - Menu actions: Rename, Reprocess, Replace Pages, Delete
+
+## Persistent My Music data model
+
+Each processed score is saved in local persistent storage:
+- SQLite database: `./data/my-music.sqlite`
+- Original uploaded source file: `./data/uploads/<score-id>.<ext>`
+
+Stored score fields include:
+- Score ID
+- Title
+- Date imported
+- Source file reference (image/pdf/xml filename + local path)
+- Recognized MusicXML
+- Parsed score data needed for direct playback (parts, measures, notes, tempo, key)
+- Detected parts and director-confirmed assignments
+- Measure map and time signatures
+- Recognition diagnostics/warnings
+- Last-used tempo %
+
+Because My Music is stored on disk, pieces persist across browser refreshes, browser restarts, and web server restarts.
 
 ## Local setup
 
@@ -85,7 +108,7 @@ http://192.168.x.x:3000
   - preprocess image
   - run `homr`
   - read produced MusicXML
-  - parse + play
+  - parse + auto-save + play
 - PDF currently processes page 1 first in this prototype.
 
 ## Important prototype constraints
