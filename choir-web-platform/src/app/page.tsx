@@ -70,6 +70,7 @@ export default function Home() {
   const [countInMeasures, setCountInMeasures] = useState<0 | 1 | 2>(1);
   const [selectedParts, setSelectedParts] = useState<Set<CanonicalPartId>>(new Set(PART_BUTTONS));
   const [gotoMeasure, setGotoMeasure] = useState("1");
+  const [measureEntryError, setMeasureEntryError] = useState<string | null>(null);
   const [loopStartMeasure, setLoopStartMeasure] = useState("1");
   const [loopEndMeasure, setLoopEndMeasure] = useState("2");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -429,21 +430,38 @@ export default function Home() {
     setSelectedParts(next);
   };
 
+  const handleGotoMeasureChange = (value: string) => {
+    setGotoMeasure(value);
+    setMeasureEntryError(null);
+  };
+
   const gotoSelectedMeasure = () => {
-    const measure = Number(gotoMeasure);
-    if (!Number.isFinite(measure)) {
+    const measure = Number(gotoMeasure.trim());
+    if (!gotoMeasure.trim().length || !Number.isFinite(measure)) {
+      setMeasureEntryError("Enter a measure number.");
       return;
     }
+    if (!measureNumbers.includes(measure)) {
+      setMeasureEntryError(`Measure ${measure} isn't in this score.`);
+      return;
+    }
+    setMeasureEntryError(null);
     playerRef.current?.seekToMeasure(measure);
   };
 
   const jumpToMeasure = (measure: number) => {
     setGotoMeasure(String(measure));
+    setMeasureEntryError(null);
     playerRef.current?.seekToMeasure(measure);
   };
 
   const jumpByMeasures = (delta: number) => {
+    setMeasureEntryError(null);
     playerRef.current?.jumpRelativeMeasures(delta);
+    const updatedMeasure = playerRef.current?.snapshot().currentMeasure;
+    if (updatedMeasure != null) {
+      setGotoMeasure(String(updatedMeasure));
+    }
   };
 
   const setLoopRange = () => {
@@ -641,7 +659,8 @@ export default function Home() {
             snapshot={snapshot}
             measureNumbers={measureNumbers}
             gotoMeasure={gotoMeasure}
-            setGotoMeasure={setGotoMeasure}
+            setGotoMeasure={handleGotoMeasureChange}
+            measureEntryError={measureEntryError}
             loopStartMeasure={loopStartMeasure}
             setLoopStartMeasure={setLoopStartMeasure}
             loopEndMeasure={loopEndMeasure}
@@ -679,17 +698,15 @@ export default function Home() {
           <header className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
             <p className="text-xs tracking-[0.14em] text-zinc-300">MOBILE REMOTE • WEBSITE ONLY</p>
             <h1 className="mt-1 text-2xl font-semibold">Rehearsal Remote</h1>
-            <p className="mt-3 text-4xl font-bold text-cyan-300">m. {snapshot.currentMeasure}</p>
-            <p className="mt-2 text-zinc-300">
-              {snapshot.tempoPercent}% • {snapshot.isCountingIn ? "Count-in" : snapshot.isPlaying ? "Playing" : "Paused"}
-            </p>
+            <p className="mt-2 text-zinc-300">{snapshot.tempoPercent}% tempo</p>
           </header>
           <RemoteControlPanel
             scoreLoaded={Boolean(score)}
             snapshot={snapshot}
             measureNumbers={measureNumbers}
             gotoMeasure={gotoMeasure}
-            setGotoMeasure={setGotoMeasure}
+            setGotoMeasure={handleGotoMeasureChange}
+            measureEntryError={measureEntryError}
             loopStartMeasure={loopStartMeasure}
             setLoopStartMeasure={setLoopStartMeasure}
             loopEndMeasure={loopEndMeasure}
@@ -1229,16 +1246,14 @@ export default function Home() {
         {activePanel === "rehearsal" ? (
           <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
             <h2 className="text-lg font-semibold">Rehearsal</h2>
-            <p className="mt-2 text-4xl font-bold text-cyan-300">m. {snapshot.currentMeasure}</p>
-            <p className="mt-1 text-sm text-zinc-300">
-              {snapshot.tempoPercent}% • {snapshot.isCountingIn ? "Count-in" : snapshot.isPlaying ? "Playing" : "Paused"}
-            </p>
+            <p className="mt-1 text-sm text-zinc-300">{snapshot.tempoPercent}% tempo</p>
             <RemoteControlPanel
               scoreLoaded={Boolean(score)}
               snapshot={snapshot}
               measureNumbers={measureNumbers}
               gotoMeasure={gotoMeasure}
-              setGotoMeasure={setGotoMeasure}
+              setGotoMeasure={handleGotoMeasureChange}
+              measureEntryError={measureEntryError}
               loopStartMeasure={loopStartMeasure}
               setLoopStartMeasure={setLoopStartMeasure}
               loopEndMeasure={loopEndMeasure}
@@ -1489,6 +1504,7 @@ function RemoteControlPanel(props: {
   measureNumbers: number[];
   gotoMeasure: string;
   setGotoMeasure: (value: string) => void;
+  measureEntryError: string | null;
   loopStartMeasure: string;
   setLoopStartMeasure: (value: string) => void;
   loopEndMeasure: string;
@@ -1535,6 +1551,78 @@ function RemoteControlPanel(props: {
         </p>
       </div>
 
+      <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
+        <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">MEASURE</p>
+        <div className="grid grid-cols-[1fr_auto] gap-3">
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            className={`rounded-xl border border-zinc-600 bg-zinc-900 px-4 text-center ${
+              props.largeButtons ? "py-5 text-3xl font-bold" : "py-4 text-2xl font-bold"
+            }`}
+            value={props.gotoMeasure}
+            onChange={(event) => props.setGotoMeasure(event.target.value.replace(/[^0-9]/g, ""))}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                props.onGoToMeasure();
+              }
+            }}
+            disabled={!props.scoreLoaded}
+          />
+          <ControlButton
+            label="GO"
+            accent
+            onClick={props.onGoToMeasure}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+        </div>
+        {props.measureEntryError ? (
+          <p className="mt-2 text-sm font-semibold text-rose-300">{props.measureEntryError}</p>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <ControlButton
+          label="−1"
+          onClick={props.onBack1}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="−2"
+          onClick={props.onBack2}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="−4"
+          onClick={props.onBack4}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="+1"
+          onClick={props.onForward1}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="+2"
+          onClick={props.onForward2}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+        <ControlButton
+          label="+4"
+          onClick={props.onForward4}
+          disabled={!props.scoreLoaded}
+          large={props.largeButtons}
+        />
+      </div>
+
       <div className="grid grid-cols-3 gap-3">
         <ControlButton
           label="BACK 2"
@@ -1557,31 +1645,7 @@ function RemoteControlPanel(props: {
         />
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <ControlButton
-          label="BACK 1"
-          onClick={props.onBack1}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="BACK 4"
-          onClick={props.onBack4}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="FORWARD 1"
-          onClick={props.onForward1}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="FORWARD 4"
-          onClick={props.onForward4}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
+      <div className="grid grid-cols-2 gap-3">
         <ControlButton
           label="TEMPO -"
           onClick={props.onTempoDown}
@@ -1614,26 +1678,12 @@ function RemoteControlPanel(props: {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <input
-          className={`rounded-xl border border-zinc-600 bg-zinc-900 px-3 ${sizeClasses}`}
-          placeholder="MEASURE"
-          value={props.gotoMeasure}
-          onChange={(event) => props.setGotoMeasure(event.target.value)}
-        />
-        <ControlButton
-          label="GO TO MEASURE"
-          onClick={props.onGoToMeasure}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="MEASURES"
-          onClick={() => setShowMeasurePicker((prev) => !prev)}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-      </div>
+      <ControlButton
+        label="MEASURES"
+        onClick={() => setShowMeasurePicker((prev) => !prev)}
+        disabled={!props.scoreLoaded}
+        large={props.largeButtons}
+      />
 
       {showMeasurePicker ? (
         <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
