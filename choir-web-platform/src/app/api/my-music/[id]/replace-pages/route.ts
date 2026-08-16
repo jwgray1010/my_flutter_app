@@ -120,6 +120,10 @@ export async function POST(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to replace score pages.";
+    console.error("[my-music/replace-pages] Recognition failed:", error);
+    if (replacementPath !== oldSourcePath) {
+      await fs.rm(replacementPath, { force: true }).catch(() => {});
+    }
     return NextResponse.json({ message }, { status: 500 });
   }
 }

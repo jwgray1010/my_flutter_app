@@ -74,6 +74,7 @@ export class ScorePlayer {
   private loopStartMeasure: number | null = null;
   private loopEndMeasure: number | null = null;
   private countInBeatsPerMeasure = 4;
+  private countInClickIntervalBeats = 1;
   private remainingCountInBeats = 0;
 
   constructor(score: ParsedScore) {
@@ -405,8 +406,14 @@ export class ScorePlayer {
     const currentMeasure = this.score.measures.find(
       (measure) => measure.displayNumber === this.measureAtBeat(this.currentBeat)
     );
-    this.countInBeatsPerMeasure = Math.max(1, Math.round(currentMeasure?.beatsInMeasure ?? 4));
-    this.remainingCountInBeats = this.countInMeasures * this.countInBeatsPerMeasure;
+    const beatsInMeasure = Math.max(0.25, currentMeasure?.beatsInMeasure ?? 4);
+    const numerator = Math.max(
+      1,
+      Math.round(Number(currentMeasure?.timeSignature?.split("/")[0])) || 4
+    );
+    this.countInBeatsPerMeasure = numerator;
+    this.countInClickIntervalBeats = beatsInMeasure / numerator;
+    this.remainingCountInBeats = this.countInMeasures * numerator;
     this.isCountingIn = this.remainingCountInBeats > 0;
     if (!this.isCountingIn) {
       this.beginPlaybackNow();
@@ -433,7 +440,7 @@ export class ScorePlayer {
       this.playCountInClick(isDownbeat);
       this.remainingCountInBeats -= 1;
       this.emitSnapshot();
-      this.runNextCountInBeat(this.secondsPerBeat() * 1000);
+      this.runNextCountInBeat(this.countInClickIntervalBeats * this.secondsPerBeat() * 1000);
     }, Math.max(0, delayMs));
   }
 

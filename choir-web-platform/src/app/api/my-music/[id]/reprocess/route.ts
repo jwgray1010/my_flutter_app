@@ -81,6 +81,7 @@ export async function POST(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to reprocess score.";
+    console.error("[my-music/reprocess] Recognition failed:", error);
     return NextResponse.json({ message }, { status: 500 });
   }
 }

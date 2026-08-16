@@ -55,6 +55,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown recognition failure occurred.";
+    console.error("[score/recognize] Recognition failed:", error);
     return NextResponse.json(
       {
         message: `OMR failed: ${message}`,

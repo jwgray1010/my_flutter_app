@@ -47,15 +47,42 @@ async function main() {
   };
 
   const measures = parsed.measures.length;
+  const allMeasureBoundariesValid = parsed.measures.every(
+    (m) =>
+      Number.isFinite(m.startBeat) &&
+      Number.isFinite(m.endBeat) &&
+      Number.isFinite(m.beatsInMeasure) &&
+      m.beatsInMeasure > 0 &&
+      m.endBeat > m.startBeat
+  );
+  const measureBoundariesAreSequential = parsed.measures.every(
+    (m, idx) => idx === 0 || m.startBeat === parsed.measures[idx - 1].endBeat
+  );
+
   const targetMeasure = parsed.measures[Math.min(12, Math.max(0, measures - 1))]?.displayNumber ?? 1;
-  const seekStart = parsed.measures.find((m) => m.displayNumber === targetMeasure)?.startBeat ?? 0;
+  const targetMeasureInfo = parsed.measures.find((m) => m.displayNumber === targetMeasure);
+  const seekStart = targetMeasureInfo?.startBeat ?? 0;
   const seekEvents = parsed.notes.filter((note) => note.startBeat >= seekStart).length;
+
+  const loopStart = parsed.measures[0];
+  const loopEnd = parsed.measures[Math.min(2, measures - 1)];
+  const loopRangeValid =
+    Number.isFinite(loopStart?.startBeat) &&
+    Number.isFinite(loopEnd?.endBeat) &&
+    (loopEnd?.endBeat ?? 0) > (loopStart?.startBeat ?? 0);
+  const notesInLoopRange = parsed.notes.filter(
+    (note) => note.startBeat >= (loopStart?.startBeat ?? 0) && note.startBeat < (loopEnd?.endBeat ?? 0)
+  ).length;
+
+  const countInBeatsForFirstMeasure = parsed.measures[0]?.beatsInMeasure ?? 0;
 
   const validation = {
     photoAccepted: true,
     omrProcessed: true,
     structuredScoreBuilt: parsed.notes.length > 0,
     measuresDetected: measures > 0,
+    allMeasureBoundariesValid,
+    measureBoundariesAreSequential,
     sopranoDetected: presentParts.has("SOPRANO") && noteCountByPart.SOPRANO > 0,
     altoDetected: presentParts.has("ALTO") && noteCountByPart.ALTO > 0,
     tenorDetected: presentParts.has("TENOR") && noteCountByPart.TENOR > 0,
@@ -74,13 +101,22 @@ async function main() {
       0,
     tempo70SupportedByControlRange: true,
     selectedMeasureSeekHasEvents: seekEvents > 0,
+    loopRangeValid,
+    loopRangeHasEvents: notesInLoopRange > 0,
+    countInBeatsDetected: countInBeatsForFirstMeasure > 0,
   };
 
   console.log("\n--- MILESTONE 1 VALIDATION SUMMARY ---");
   console.log(`Measures detected: ${measures}`);
   console.log(`Part note counts: ${JSON.stringify(noteCountByPart)}`);
   console.log(`Seek test: measure ${targetMeasure}, events from start: ${seekEvents}`);
+  console.log(`Loop test: measure ${loopStart?.displayNumber}-${loopEnd?.displayNumber}, events in range: ${notesInLoopRange}`);
   console.log(`Checks: ${JSON.stringify(validation, null, 2)}`);
+
+  const failed = Object.entries(validation).filter(([, value]) => value === false);
+  if (failed.length) {
+    throw new Error(`Validation failed for: ${failed.map(([key]) => key).join(", ")}`);
+  }
 }
 
 async function renderFirstPageAsPhoto(sourceXmlPath: string, outputPath: string) {

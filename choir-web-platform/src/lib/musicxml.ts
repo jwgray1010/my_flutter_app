@@ -164,6 +164,7 @@ function readMeasureTemplate(partNode: Element): MeasureInfo[] {
   const template: MeasureInfo[] = [];
   let currentBeats = 4;
   let currentBeatType = 4;
+  let currentDivisions = 1;
   let cursorBeats = 0;
 
   measures.forEach((measureNode, idx) => {
@@ -173,10 +174,17 @@ function readMeasureTemplate(partNode: Element): MeasureInfo[] {
     currentBeats = Math.max(1, beats);
     currentBeatType = Math.max(1, beatType);
 
+    const divisions = parseIntOr(
+      textOf(measureNode.querySelector("attributes > divisions")),
+      currentDivisions
+    );
+    currentDivisions = Math.max(1, divisions);
+
     const measureDurationBeats = inferMeasureDurationBeats(
       measureNode,
       currentBeats,
-      currentBeatType
+      currentBeatType,
+      currentDivisions
     );
     const displayNumber = parseIntOr(measureNode.getAttribute("number"), idx + 1);
     template.push({
@@ -196,13 +204,9 @@ function readMeasureTemplate(partNode: Element): MeasureInfo[] {
 function inferMeasureDurationBeats(
   measureNode: Element,
   beats: number,
-  beatType: number
+  beatType: number,
+  divisions: number
 ) {
-  const divisions = parseIntOr(
-    textOf(measureNode.querySelector("attributes > divisions")),
-    1
-  );
-
   let maxCursor = 0;
   let cursor = 0;
   const children = Array.from(measureNode.children);
@@ -451,6 +455,9 @@ function textOf(el: Element | null | undefined) {
 }
 
 function parseIntOr(value: string | null | undefined, fallback: number) {
+  if (value == null || value.trim() === "") {
+    return fallback;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }

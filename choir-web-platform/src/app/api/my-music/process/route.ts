@@ -118,6 +118,9 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to process and save score.";
+    console.error("[my-music/process] Recognition failed:", error);
+    await fs.rm(sourceFilePath, { force: true }).catch(() => {});
+    await fs.rm(audiverisOutputDir, { recursive: true, force: true }).catch(() => {});
     return NextResponse.json({ message }, { status: 500 });
   }
 }
