@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { parseMusicXmlToScore } from "@/lib/musicxml";
 import { ScorePlayer, type PlaybackSnapshot } from "@/lib/score-player";
 import type { CanonicalPartId, OMRDiagnostics, ParsedScore } from "@/lib/score-types";
@@ -41,12 +40,12 @@ type SavedMusicItem = {
 };
 
 export default function Home() {
-  const searchParams = useSearchParams();
   const [score, setScore] = useState<ParsedScore | null>(null);
   const [diagnostics, setDiagnostics] = useState<OMRDiagnostics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [isPhoneViewport, setIsPhoneViewport] = useState(false);
+  const [studentMode, setStudentMode] = useState<StudentMode | null>(null);
   const [activePanel, setActivePanel] = useState<DirectorPanel>("upload");
   const [snapshot, setSnapshot] = useState<PlaybackSnapshot>(initialSnapshot);
   const [selectedParts, setSelectedParts] = useState<Set<CanonicalPartId>>(new Set(PART_BUTTONS));
@@ -81,6 +80,19 @@ export default function Home() {
     updateViewport();
     mediaQuery.addEventListener("change", updateViewport);
     return () => mediaQuery.removeEventListener("change", updateViewport);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const updateModeFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      setStudentMode(normalizeStudentMode(params.get("mode") ?? params.get("studentMode")));
+    };
+    updateModeFromUrl();
+    window.addEventListener("popstate", updateModeFromUrl);
+    return () => window.removeEventListener("popstate", updateModeFromUrl);
   }, []);
 
   useEffect(() => {
@@ -182,30 +194,6 @@ export default function Home() {
     }
     return set;
   }, [score]);
-
-  const studentMode = useMemo(() => {
-    const modeValue = (
-      searchParams.get("mode") ??
-      searchParams.get("studentMode") ??
-      ""
-    ).toLowerCase();
-    if (modeValue === "station") {
-      return "station";
-    }
-    if (modeValue === "sectional") {
-      return "sectional";
-    }
-    if (modeValue === "solo") {
-      return "solo";
-    }
-    if (modeValue === "checkin") {
-      return "checkin";
-    }
-    if (modeValue === "vocal") {
-      return "vocal";
-    }
-    return null;
-  }, [searchParams]);
 
   const handleTogglePart = (part: CanonicalPartId) => {
     if (!availableCanonicalParts.has(part)) {
@@ -549,6 +537,26 @@ export default function Home() {
       </main>
     </div>
   );
+}
+
+function normalizeStudentMode(modeValue: string | null): StudentMode | null {
+  const normalized = (modeValue ?? "").toLowerCase();
+  if (normalized === "station") {
+    return "station";
+  }
+  if (normalized === "sectional") {
+    return "sectional";
+  }
+  if (normalized === "solo") {
+    return "solo";
+  }
+  if (normalized === "checkin") {
+    return "checkin";
+  }
+  if (normalized === "vocal") {
+    return "vocal";
+  }
+  return null;
 }
 
 function defaultSelectedPartsFromScore(parsed: ParsedScore) {
