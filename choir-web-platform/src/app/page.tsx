@@ -1332,7 +1332,6 @@ export default function Home() {
         {activePanel === "rehearsal" ? (
           <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
             <h2 className="text-lg font-semibold">Rehearsal</h2>
-            <p className="mt-1 text-sm text-zinc-300">{snapshot.tempoPercent}% tempo</p>
             <RemoteControlPanel
               scoreLoaded={Boolean(score)}
               snapshot={snapshot}
@@ -1667,11 +1666,17 @@ function RemoteControlPanel(props: {
 
   return (
     <div className="mt-4 space-y-4">
+      {/* 1. CURRENT MEASURE / TEMPO / STATUS + PLAY */}
       <div className="rounded-xl border border-cyan-700/60 bg-cyan-900/20 px-4 py-3">
-        <p className="text-xs tracking-[0.12em] text-cyan-200">CURRENT MEASURE</p>
-        <p className={`${props.largeButtons ? "text-5xl" : "text-4xl"} font-bold text-cyan-300`}>
-          m. {props.snapshot.currentMeasure}
-        </p>
+        <div className="flex items-baseline justify-between">
+          <div>
+            <p className="text-xs tracking-[0.12em] text-cyan-200">CURRENT MEASURE</p>
+            <p className={`${props.largeButtons ? "text-5xl" : "text-4xl"} font-bold text-cyan-300`}>
+              m. {props.snapshot.currentMeasure}
+            </p>
+          </div>
+          <p className="text-xl font-semibold text-cyan-200">{props.snapshot.tempoPercent}%</p>
+        </div>
         <p className="text-sm text-cyan-100">
           {props.snapshot.isCountingIn
             ? "Count-in..."
@@ -1681,6 +1686,55 @@ function RemoteControlPanel(props: {
         </p>
       </div>
 
+      <ControlButton
+        label={props.snapshot.isPlaying ? "PAUSE" : "PLAY"}
+        accent
+        onClick={props.onTogglePlay}
+        disabled={!props.scoreLoaded}
+        large
+      />
+
+      {/* 2. PARTS - primary rehearsal control, large toggles, visible without scrolling */}
+      <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
+        <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">PARTS</p>
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={props.onSelectAllParts}
+            disabled={!props.scoreLoaded}
+            className={`rounded-xl px-3 py-6 text-xl font-bold disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 ${
+              allPartsSelected(props.selectedParts, props.availableCanonicalParts)
+                ? "bg-cyan-400 text-black"
+                : "bg-zinc-700 text-zinc-100"
+            }`}
+          >
+            ALL
+          </button>
+          {PART_BUTTONS.map((part) => {
+            const selected = props.selectedParts.has(part);
+            const disabled = !props.availableCanonicalParts.has(part);
+            return (
+              <button
+                key={part}
+                type="button"
+                disabled={disabled}
+                onClick={() => props.onTogglePart(part)}
+                className={`rounded-xl px-3 py-6 text-xl font-bold ${
+                  selected
+                    ? "bg-cyan-400 text-black"
+                    : disabled
+                      ? "bg-zinc-800 text-zinc-500"
+                      : "bg-zinc-700 text-zinc-100"
+                }`}
+              >
+                {partToggleLabel(part)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 3. MEASURE navigation */}
       <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
         <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">MEASURE</p>
         <div className="grid grid-cols-[1fr_auto] gap-3">
@@ -1712,86 +1766,98 @@ function RemoteControlPanel(props: {
         {props.measureEntryError ? (
           <p className="mt-2 text-sm font-semibold text-rose-300">{props.measureEntryError}</p>
         ) : null}
+
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          <ControlButton
+            label="−1"
+            onClick={props.onBack1}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+          <ControlButton
+            label="−2"
+            onClick={props.onBack2}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+          <ControlButton
+            label="−4"
+            onClick={props.onBack4}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+          <ControlButton
+            label="+1"
+            onClick={props.onForward1}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+          <ControlButton
+            label="+2"
+            onClick={props.onForward2}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+          <ControlButton
+            label="+4"
+            onClick={props.onForward4}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+        </div>
+
+        <div className="mt-3">
+          <ControlButton
+            label="MEASURES"
+            onClick={() => setShowMeasurePicker((prev) => !prev)}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+        </div>
+
+        {showMeasurePicker ? (
+          <div className="mt-3 rounded-xl border border-zinc-700 bg-zinc-900/60 p-3">
+            <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">MEASURES</p>
+            <div className="max-h-64 overflow-y-auto rounded-lg border border-zinc-700 p-2">
+              <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+                {props.measureNumbers.map((measure) => (
+                  <button
+                    key={measure}
+                    type="button"
+                    onClick={() => {
+                      props.setGotoMeasure(String(measure));
+                      props.onJumpToMeasure(measure);
+                    }}
+                    className="rounded-lg bg-zinc-700 px-3 py-3 text-sm font-semibold text-zinc-100 hover:bg-cyan-500 hover:text-black"
+                  >
+                    {measure}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
-        <ControlButton
-          label="−1"
-          onClick={props.onBack1}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="−2"
-          onClick={props.onBack2}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="−4"
-          onClick={props.onBack4}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="+1"
-          onClick={props.onForward1}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="+2"
-          onClick={props.onForward2}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="+4"
-          onClick={props.onForward4}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-      </div>
-
-      <div className="grid grid-cols-3 gap-3">
-        <ControlButton
-          label="BACK 2"
-          onClick={props.onBack2}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label={props.snapshot.isPlaying ? "PAUSE" : "PLAY"}
-          accent
-          onClick={props.onTogglePlay}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="FORWARD 2"
-          onClick={props.onForward2}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <ControlButton
-          label="TEMPO -"
-          onClick={props.onTempoDown}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="TEMPO +"
-          onClick={props.onTempoUp}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-      </div>
-
+      {/* 4. TEMPO / COUNT-IN */}
       <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
-        <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">COUNT-IN</p>
+        <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">TEMPO</p>
+        <div className="grid grid-cols-2 gap-3">
+          <ControlButton
+            label="TEMPO -"
+            onClick={props.onTempoDown}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+          <ControlButton
+            label="TEMPO +"
+            onClick={props.onTempoUp}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
+        </div>
+
+        <p className="mb-2 mt-3 text-sm font-semibold tracking-[0.08em] text-zinc-300">COUNT-IN</p>
         <div className="grid grid-cols-3 gap-2">
           {[0, 1, 2].map((count) => (
             <button
@@ -1808,97 +1874,69 @@ function RemoteControlPanel(props: {
         </div>
       </div>
 
-      <ControlButton
-        label="MEASURES"
-        onClick={() => setShowMeasurePicker((prev) => !prev)}
-        disabled={!props.scoreLoaded}
-        large={props.largeButtons}
-      />
-
-      {showMeasurePicker ? (
-        <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
-          <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">MEASURES</p>
-          <div className="max-h-64 overflow-y-auto rounded-lg border border-zinc-700 p-2">
-            <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
-              {props.measureNumbers.map((measure) => (
-                <button
-                  key={measure}
-                  type="button"
-                  onClick={() => {
-                    props.setGotoMeasure(String(measure));
-                    props.onJumpToMeasure(measure);
-                  }}
-                  className="rounded-lg bg-zinc-700 px-3 py-3 text-sm font-semibold text-zinc-100 hover:bg-cyan-500 hover:text-black"
-                >
-                  {measure}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="grid grid-cols-2 gap-3">
-        <input
-          className={`rounded-xl border border-zinc-600 bg-zinc-900 px-3 ${sizeClasses}`}
-          placeholder="LOOP START"
-          value={props.loopStartMeasure}
-          onChange={(event) => props.setLoopStartMeasure(event.target.value)}
-        />
-        <input
-          className={`rounded-xl border border-zinc-600 bg-zinc-900 px-3 ${sizeClasses}`}
-          placeholder="LOOP END"
-          value={props.loopEndMeasure}
-          onChange={(event) => props.setLoopEndMeasure(event.target.value)}
-        />
-        <ControlButton
-          label="START LOOP"
-          onClick={props.onStartLoop}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-        <ControlButton
-          label="STOP LOOP"
-          onClick={props.onStopLoop}
-          disabled={!props.scoreLoaded}
-          large={props.largeButtons}
-        />
-      </div>
-
+      {/* 5. LOOP */}
       <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
-        <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">PARTS</p>
-        <div className="grid grid-cols-3 gap-2">
+        <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">LOOP</p>
+        <div className="grid grid-cols-2 gap-3">
+          <input
+            className={`rounded-xl border border-zinc-600 bg-zinc-900 px-3 ${sizeClasses}`}
+            placeholder="LOOP START"
+            value={props.loopStartMeasure}
+            onChange={(event) => props.setLoopStartMeasure(event.target.value)}
+          />
+          <input
+            className={`rounded-xl border border-zinc-600 bg-zinc-900 px-3 ${sizeClasses}`}
+            placeholder="LOOP END"
+            value={props.loopEndMeasure}
+            onChange={(event) => props.setLoopEndMeasure(event.target.value)}
+          />
           <ControlButton
-            label="ALL"
-            onClick={props.onSelectAllParts}
+            label="START LOOP"
+            onClick={props.onStartLoop}
             disabled={!props.scoreLoaded}
             large={props.largeButtons}
           />
-          {PART_BUTTONS.map((part) => {
-            const selected = props.selectedParts.has(part);
-            const disabled = !props.availableCanonicalParts.has(part);
-            return (
-              <button
-                key={part}
-                type="button"
-                disabled={disabled}
-                onClick={() => props.onTogglePart(part)}
-                className={`rounded-xl px-3 ${sizeClasses} ${
-                  selected
-                    ? "bg-cyan-400 text-black"
-                    : disabled
-                      ? "bg-zinc-800 text-zinc-500"
-                      : "bg-zinc-700 text-zinc-100"
-                }`}
-              >
-                {part}
-              </button>
-            );
-          })}
+          <ControlButton
+            label="STOP LOOP"
+            onClick={props.onStopLoop}
+            disabled={!props.scoreLoaded}
+            large={props.largeButtons}
+          />
         </div>
       </div>
     </div>
   );
+}
+
+function partToggleLabel(part: CanonicalPartId) {
+  if (part === "SOPRANO") {
+    return "S";
+  }
+  if (part === "ALTO") {
+    return "A";
+  }
+  if (part === "TENOR") {
+    return "T";
+  }
+  if (part === "BASS") {
+    return "B";
+  }
+  if (part === "PIANO") {
+    return "PIANO";
+  }
+  return part;
+}
+
+function allPartsSelected(
+  selectedParts: Set<CanonicalPartId>,
+  availableCanonicalParts: Set<CanonicalPartId>
+) {
+  for (const part of availableCanonicalParts) {
+    if (!selectedParts.has(part)) {
+      return false;
+    }
+  }
+  return availableCanonicalParts.size > 0;
 }
 
 function ControlButton(props: {
