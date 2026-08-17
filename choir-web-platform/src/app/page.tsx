@@ -63,6 +63,7 @@ export default function Home() {
   const [diagnostics, setDiagnostics] = useState<OMRDiagnostics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const [processingElapsedSeconds, setProcessingElapsedSeconds] = useState(0);
   const [isPhoneViewport, setIsPhoneViewport] = useState(false);
   const [studentMode, setStudentMode] = useState<StudentMode | null>(null);
   const [activePanel, setActivePanel] = useState<DirectorPanel>("upload");
@@ -257,6 +258,11 @@ export default function Home() {
     setError(null);
     setFeedbackMessage(null);
     setIsBusy(true);
+    setProcessingElapsedSeconds(0);
+    const startedAt = Date.now();
+    const tickTimer = setInterval(() => {
+      setProcessingElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -282,6 +288,7 @@ export default function Home() {
       const message = caught instanceof Error ? caught.message : "Unknown recognition error.";
       setError(message);
     } finally {
+      clearInterval(tickTimer);
       setIsBusy(false);
     }
   }, [fetchSavedScoreRecord, hydrateFromSavedRecord, pendingFile, refreshSavedMusic]);
@@ -860,7 +867,17 @@ export default function Home() {
             <p className="mt-3 text-sm text-zinc-300">
               {pendingFile ? pendingFile.name : "[no file selected]"}
             </p>
-            {isBusy ? <p className="mt-3 text-sm text-cyan-300">PROCESSING MUSIC...</p> : null}
+            {isBusy ? (
+              <div className="mt-3 rounded-xl border border-cyan-700/60 bg-cyan-950/20 p-3">
+                <p className="text-sm font-semibold text-cyan-300">
+                  PROCESSING MUSIC... ({processingElapsedSeconds}s)
+                </p>
+                <p className="mt-1 text-xs text-cyan-100">
+                  Multi-page PDFs and larger files can take a minute or more. This is normal —
+                  please keep this tab open and wait for it to finish.
+                </p>
+              </div>
+            ) : null}
             {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
             {feedbackMessage ? <p className="mt-3 text-sm text-emerald-300">{feedbackMessage}</p> : null}
             {diagnostics ? (

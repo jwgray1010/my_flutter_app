@@ -59,7 +59,7 @@ export function parseMusicXmlToScore(
     if (!voiceGroups || voiceGroups.length <= 1) {
       // Single voice (or piano grand staff kept as one group): preserve the
       // simple, backward-compatible behavior of one RecognizedPart per part.
-      const detected = detectCanonicalPart(sourceName, idx, partNodes.length, staves);
+      const detected = detectCanonicalPart(sourceName, staves);
       const partMeta: RecognizedPart = {
         id: sourcePartId,
         sourceName,
@@ -169,8 +169,13 @@ function detectSubstantiveVoices(partNode: Element): VoiceGroup[] | null {
     }
   });
 
-  const MIN_NOTES = 3;
-  const MIN_MEASURES = 2;
+  // A real independent choral voice sustains itself across a meaningful
+  // stretch of the piece. A handful of scattered notes spread thinly across
+  // many measures is much more often an Audiveris misread (a stray voice
+  // number applied to a couple of noteheads) than a genuine extra part, so
+  // the bar is set higher than "more than a couple of notes".
+  const MIN_NOTES = 6;
+  const MIN_MEASURES = 3;
   const groups: VoiceGroup[] = Array.from(stats.entries())
     .map(([voiceNumber, entry]) => ({
       voiceNumber,
@@ -492,8 +497,6 @@ function estimatePartStaves(partNode: Element) {
 
 function detectCanonicalPart(
   sourceName: string,
-  index: number,
-  total: number,
   staves: number
 ): { canonicalPart: CanonicalPartId; confident: boolean } {
   const normalized = sourceName.toLowerCase();
@@ -517,19 +520,28 @@ function detectCanonicalPart(
   ) {
     return { canonicalPart: "PIANO", confident: true };
   }
-  if (total === 4) {
-    // Positional guess only (e.g. generic "Voice 1..4" parts) - not a
-    // confirmed identification, the director should verify it.
-    return {
-      canonicalPart: (["SOPRANO", "ALTO", "TENOR", "BASS"][index] as CanonicalPartId) ?? "UNKNOWN",
-      confident: false,
-    };
-  }
+  // No reliable name match (e.g. generic "Voice 1", "Voice 2"...). Leave
+  // unresolved here rather than guessing by position - autoResolveUnknownParts
+  // resolves every unnamed part together, by relative pitch, so a piece with
+  // more voices than the 4 standard SATB slots doesn't get a voice forced
+  // into a register it doesn't actually occupy.
   return { canonicalPart: "UNKNOWN", confident: false };
 }
 
+/**
+ * Resolves every unnamed ("UNKNOWN") part/voice by relative pitch, assigning
+ * the highest-registered remaining voice to the highest-registered remaining
+ * SATB slot, and so on down. Crucially, this only fills as many slots as are
+ * actually still open: if a piece has more independent voices than SATB
+ * roles (e.g. a condensed choral reduction with divisi, or several shared
+ * staves), the extra voices are left UNKNOWN rather than being forced into a
+ * register they don't belong in (e.g. never labels a tenor-range voice
+ * "BASS" just because "BASS" happened to be the last free label).
+ */
 function autoResolveUnknownParts(parts: RecognizedPart[], notes: NoteEvent[]) {
-  const assigned = new Set(parts.map((part) => part.canonicalPart));
+  const assigned = new Set(
+    parts.filter((part) => part.canonicalPart !== "UNKNOWN").map((part) => part.canonicalPart)
+  );
   const unknown = parts.filter((part) => part.canonicalPart === "UNKNOWN");
   if (!unknown.length) {
     return;
@@ -543,42 +555,22 @@ function autoResolveUnknownParts(parts: RecognizedPart[], notes: NoteEvent[]) {
     midiByPart.get(note.partId)?.push(note.midi);
   }
 
-  unknown.sort((a, b) => {
-    const aMedian = median(midiByPart.get(a.id) ?? []);
-    const bMedian = median(midiByPart.get(b.id) ?? []);
-    return bMedian - aMedian;
-  });
+  const rankedUnknown = [...unknown].sort(
+    (a, b) => median(midiByPart.get(b.id) ?? []) - median(midiByPart.get(a.id) ?? [])
+  );
 
-  for (const part of unknown) {
-    const fallback = pickFallbackByMedian(assigned, midiByPart.get(part.id) ?? []);
-    if (!fallback) {
-      continue;
-    }
-    part.canonicalPart = fallback;
-    part.needsConfirmation = true;
-    assigned.add(fallback);
-  }
-}
+  const satbOrder: CanonicalPartId[] = ["SOPRANO", "ALTO", "TENOR", "BASS"];
+  const remainingRoles = satbOrder.filter((role) => !assigned.has(role));
 
-function pickFallbackByMedian(
-  assigned: Set<CanonicalPartId>,
-  midiList: number[]
-): CanonicalPartId | null {
-  const med = median(midiList);
-  if (!assigned.has("BASS") && med <= 58) {
-    return "BASS";
+  for (let i = 0; i < rankedUnknown.length && i < remainingRoles.length; i += 1) {
+    const role = remainingRoles[i];
+    rankedUnknown[i].canonicalPart = role;
+    rankedUnknown[i].needsConfirmation = true;
+    assigned.add(role);
   }
-  if (!assigned.has("TENOR") && med <= 67) {
-    return "TENOR";
-  }
-  if (!assigned.has("ALTO") && med <= 74) {
-    return "ALTO";
-  }
-  if (!assigned.has("SOPRANO")) {
-    return "SOPRANO";
-  }
-  const inOrder: CanonicalPartId[] = ["SOPRANO", "ALTO", "TENOR", "BASS"];
-  return inOrder.find((candidate) => !assigned.has(candidate)) ?? null;
+  // Any voices beyond the number of open SATB roles stay UNKNOWN - there is
+  // no musically-defensible automatic guess for them, so the director is
+  // asked via Identify Parts instead of receiving a wrong answer.
 }
 
 function pitchToMidi(step: string | null, octave: number, alter: number) {
