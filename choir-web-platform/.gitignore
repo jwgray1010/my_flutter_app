@@ -16,7 +16,6 @@
 # next.js
 /.next/
 /out/
-/data/
 
 # production
 /build
@@ -24,6 +23,9 @@
 # misc
 .DS_Store
 *.pem
+*.key
+*.crt
+*.p12
 
 # debug
 npm-debug.log*
@@ -31,8 +33,14 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files / secrets - never commit real credentials
+.env
+.env*.local
+.env.development
+.env.production
+.env.test
+*.secrets
+secrets.json
 
 # vercel
 .vercel
@@ -40,3 +48,48 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# -----------------------------------------------------------------------
+# Rehearsal Keys runtime data - uploaded sheet music, recognition output,
+# and the local library database. None of this is source code, and much
+# of it may be copyrighted or otherwise private to whoever is running the
+# app, so it must never be committed regardless of where it happens to be
+# written from.
+# -----------------------------------------------------------------------
+
+# Primary runtime data directory (uploads, Audiveris .omr/.mxl output,
+# extracted MusicXML, and the SQLite "My Music" library all live here -
+# see dataStoragePaths() in src/lib/server/my-music-db.ts).
+/data/
+data/
+
+# Defense-in-depth: also ignore these by name/extension anywhere in the
+# tree, in case a future change moves runtime storage elsewhere.
+/uploads/
+uploads/
+audiveris-output/
+audiveris_output/
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.omr
+
+# Uploaded/scanned score source files and Audiveris exports, wherever
+# they land. Legitimate project assets (e.g. icons in /public) do not use
+# these extensions, so this does not remove anything needed to build the
+# app.
+*.mxl
+uploaded-*.jpg
+uploaded-*.jpeg
+uploaded-*.png
+uploaded-*.pdf
+scan-*.jpg
+scan-*.jpeg
+scan-*.png
+scan-*.pdf
+
+# Temporary files Audiveris/OMR tooling may write outside of /data
+*.omr.tmp
+audiveris-tmp/
