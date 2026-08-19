@@ -1,10 +1,24 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
+import 'class_session_models.dart';
 import 'models.dart';
 import 'networking.dart';
 import 'rehearsal_controller.dart';
+import 'remote_roku_ui.dart';
+import 'teacher_view_screen.dart';
+import 'voice_commands.dart';
+import 'voice_help_screen.dart';
+import 'voice_ptt_service.dart';
+import 'vocal_coach_flow.dart';
+import 'warmup_session_controller.dart';
+import 'warmups_flow.dart';
+import 'warmups_library.dart';
+import 'warmups_models.dart';
 
 class ChoirRehearsalApp extends StatelessWidget {
   const ChoirRehearsalApp({super.key});
@@ -81,7 +95,7 @@ class RoleSelectionScreen extends StatelessWidget {
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) => const MainPlayerScreen(),
+                            builder: (_) => const PlayerHomeScreen(),
                           ),
                         );
                       },
@@ -94,7 +108,7 @@ class RoleSelectionScreen extends StatelessWidget {
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) => const PhoneRemoteScreen(),
+                            builder: (_) => const RokuRemoteScreen(),
                           ),
                         );
                       },
@@ -162,6 +176,82 @@ class _RoleCard extends StatelessWidget {
   }
 }
 
+class PlayerHomeScreen extends StatelessWidget {
+  const PlayerHomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF15181D),
+      appBar: AppBar(
+        title: const Text('Player Home'),
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Choose Mode',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  height: 112,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF6E5BFF),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const MainPlayerScreen(),
+                        ),
+                      );
+                    },
+                    child: const Text('Rehearsal'),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  height: 112,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1E232B),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const WarmupCategoryScreen(),
+                        ),
+                      );
+                    },
+                    child: const Text('Warmups'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class MainPlayerScreen extends StatefulWidget {
   const MainPlayerScreen({super.key});
 
@@ -172,11 +262,21 @@ class MainPlayerScreen extends StatefulWidget {
 class _MainPlayerScreenState extends State<MainPlayerScreen> {
   final RehearsalController _controller = RehearsalController();
   final TextEditingController _jumpMeasureController = TextEditingController();
+  final VoicePttService _voiceService = VoicePttService();
+  final VoiceCommandParser _voiceParser = VoiceCommandParser();
+
+  bool _voicePermissionGranted = false;
+  bool _isPttListening = false;
+  bool _isPttProcessing = false;
+  bool _choirRoomMode = false;
+  bool _requireWakePhraseInChoirMode = true;
+  String _wakePhrase = 'Podium';
 
   @override
   void initState() {
     super.initState();
     unawaited(_controller.initialize());
+    unawaited(_initializeVoice());
   }
 
   @override
@@ -184,6 +284,16 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
     _jumpMeasureController.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _initializeVoice() async {
+    final granted = await _voiceService.requestPermissions();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _voicePermissionGranted = granted;
+    });
   }
 
   @override
@@ -199,12 +309,55 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
           appBar: AppBar(
             title: const Text('Main Player'),
             actions: [
+              IconButton(
+                tooltip: 'Voice commands help',
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const VoiceCommandsHelpScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.help_outline),
+              ),
+              IconButton(
+                tooltip: 'Pair remote (QR)',
+                onPressed: _showPairingQrSheet,
+                icon: const Icon(Icons.qr_code),
+              ),
+              IconButton(
+                tooltip: 'Teacher View',
+                onPressed: _openTeacherView,
+                icon: const Icon(Icons.monitor),
+              ),
+              if (_isPttListening || _isPttProcessing)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Center(
+                    child: _VoiceStatusPill(
+                      isListening: _isPttListening,
+                      isProcessing: _isPttProcessing,
+                    ),
+                  ),
+                ),
               Padding(
-                padding: const EdgeInsets.only(right: 16),
+                padding: const EdgeInsets.only(right: 10),
                 child: Center(
                   child: Text(
                     'Remote port ${_controller.serverPort}',
                     style: const TextStyle(fontSize: 16),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Center(
+                  child: _PttHoldButton(
+                    size: 56,
+                    isListening: _isPttListening,
+                    onPressStart: _handleVoicePressStart,
+                    onPressEnd: _handleVoicePressEnd,
+                    semanticsLabel: 'Hold to talk',
                   ),
                 ),
               ),
@@ -225,6 +378,30 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                       icon: const Icon(Icons.upload_file),
                       label: const Text('Load MusicXML'),
                     ),
+                    ElevatedButton.icon(
+                      onPressed: _showPairingQrSheet,
+                      icon: const Icon(Icons.qr_code),
+                      label: const Text('Pair Remote'),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: _showStartClassSessionDialog,
+                      icon: const Icon(Icons.class_),
+                      label: Text(
+                        _controller.hasActiveClassSession
+                            ? 'Restart Class Session'
+                            : 'Start Class Session',
+                      ),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: _openTeacherView,
+                      icon: const Icon(Icons.assessment),
+                      label: const Text('Teacher View'),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: _openVocalCoach,
+                      icon: const Icon(Icons.graphic_eq),
+                      label: const Text('Vocal Coach'),
+                    ),
                     Text(
                       _controller.loadedFileName ?? 'No score loaded',
                       style: const TextStyle(fontSize: 18),
@@ -236,6 +413,10 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                       ),
                   ],
                 ),
+                if (_controller.classSession != null) ...[
+                  const SizedBox(height: 10),
+                  _ClassSessionStatusCard(session: _controller.classSession!),
+                ],
                 if (_controller.errorMessage != null) ...[
                   const SizedBox(height: 10),
                   Text(
@@ -249,7 +430,31 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
                   tempoPercent: playback.tempoPercent,
                   loopA: playback.loopA,
                   loopB: playback.loopB,
+                  loopArmed: _controller.playbackController.loopArmed,
                   isPlaying: playback.isPlaying,
+                ),
+                const SizedBox(height: 12),
+                _VoiceSafetyCard(
+                  choirRoomMode: _choirRoomMode,
+                  requireWakePhrase: _requireWakePhraseInChoirMode,
+                  wakePhrase: _wakePhrase,
+                  confidenceThreshold: _minimumConfidence,
+                  permissionGranted: _voicePermissionGranted,
+                  onChoirRoomModeChanged: (value) {
+                    setState(() {
+                      _choirRoomMode = value;
+                    });
+                  },
+                  onRequireWakePhraseChanged: (value) {
+                    setState(() {
+                      _requireWakePhraseInChoirMode = value;
+                    });
+                  },
+                  onWakePhraseChanged: (value) {
+                    setState(() {
+                      _wakePhrase = value;
+                    });
+                  },
                 ),
                 const SizedBox(height: 16),
                 Wrap(
@@ -380,6 +585,538 @@ class _MainPlayerScreenState extends State<MainPlayerScreen> {
     }
     _controller.jumpToMeasure(measure);
   }
+
+  Future<void> _showPairingQrSheet() async {
+    final payload = await _controller.pairingPayload();
+    await _showQrPayloadSheet(
+      title: 'Pair Remote',
+      payload: payload,
+    );
+  }
+
+  Future<void> _showQrPayloadSheet({
+    required String title,
+    required Map<String, dynamic> payload,
+  }) async {
+    if (!mounted) {
+      return;
+    }
+    final qrData = jsonEncode(payload);
+    final pretty = const JsonEncoder.withIndent('  ').convert(payload);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                QrImageView(
+                  data: qrData,
+                  version: QrVersions.auto,
+                  size: 260,
+                  foregroundColor: Colors.white,
+                  backgroundColor: Colors.black,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  pretty,
+                  style: const TextStyle(fontSize: 12, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showStartClassSessionDialog() async {
+    final textController = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Start Class Session'),
+          content: TextField(
+            controller: textController,
+            decoration: const InputDecoration(labelText: 'Class name (optional)'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                await _controller.startClassSession(
+                  className: textController.text.trim(),
+                );
+                if (!mounted) {
+                  return;
+                }
+                Navigator.of(context).pop();
+                _openTeacherView();
+              },
+              child: const Text('Start'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _openTeacherView() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TeacherViewScreen(controller: _controller),
+      ),
+    );
+  }
+
+  Future<void> _openVocalCoach() async {
+    final studentName = await _promptStudentNameForCoach();
+    if (!mounted || studentName == null || studentName.trim().isEmpty) {
+      return;
+    }
+    final trimmedName = studentName.trim();
+    final studentId = _normalizedStudentId(trimmedName);
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => VocalCoachScreen(
+          studentId: studentId,
+          studentName: trimmedName,
+          sessionId: _controller.classSession?.sessionId,
+          onSaveProfile: (profile, plan) {
+            return _controller.saveVocalCoachProfile(
+              profile: profile,
+              plan: plan,
+            );
+          },
+          onSaveProgress: _controller.saveVocalCoachProgress,
+          onRunWarmup: _openWarmupById,
+        ),
+      ),
+    );
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<String?> _promptStudentNameForCoach() {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Vocal Coach Student'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'Student name',
+              hintText: 'First + last initial',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+              child: const Text('Start'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _normalizedStudentId(String studentName) {
+    final normalized = studentName
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    return normalized.isEmpty ? 'student_unknown' : normalized;
+  }
+
+  Future<void> _openWarmupById(String warmupId) async {
+    final library = WarmupsLibrary.buildAll();
+    Warmup? selected;
+    for (final warmup in library) {
+      if (warmup.id == warmupId) {
+        selected = warmup;
+        break;
+      }
+    }
+    if (selected == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Warmup not found: $warmupId')),
+        );
+      }
+      return;
+    }
+    final controller = WarmupSessionController(library: library);
+    await controller.initializeAudio();
+    controller.selectWarmup(selected);
+    if (!mounted) {
+      controller.dispose();
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WarmupPlayerScreen(controller: controller),
+      ),
+    );
+    controller.dispose();
+  }
+
+  double get _minimumConfidence => _choirRoomMode ? 0.62 : 0.35;
+
+  Future<void> _handleVoicePressStart() async {
+    if (_isPttListening || _isPttProcessing) {
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    if (!_voicePermissionGranted) {
+      final granted = await _voiceService.requestPermissions();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _voicePermissionGranted = granted;
+      });
+      if (!granted) {
+        _showVoiceToast(
+          success: false,
+          message: 'Speech permission denied.',
+          suggestion: 'Enable microphone + speech permissions in Settings.',
+        );
+        return;
+      }
+    }
+
+    final started = await _voiceService.startListening(
+      preferOffline: true,
+      allowStandardFallback: true,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (!started.started) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: started.message,
+      );
+      return;
+    }
+    setState(() {
+      _isPttListening = true;
+    });
+  }
+
+  Future<void> _handleVoicePressEnd() async {
+    if (!_isPttListening) {
+      return;
+    }
+    HapticFeedback.selectionClick();
+    setState(() {
+      _isPttListening = false;
+      _isPttProcessing = true;
+    });
+
+    final stopResult = await _voiceService.stopListening();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isPttProcessing = false;
+    });
+
+    final normalized = normalizeTranscript(stopResult.transcript);
+    if (normalized.isEmpty) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try: 'measure 32'.",
+      );
+      return;
+    }
+    if (stopResult.confidence < _minimumConfidence) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try again clearly: 'go to measure 32'.",
+      );
+      return;
+    }
+
+    var parserText = normalized;
+    if (_choirRoomMode && _requireWakePhraseInChoirMode) {
+      final wake = _wakePhrase.toLowerCase();
+      final hasWakePhrase = parserText.contains(wake);
+      if (!hasWakePhrase) {
+        _showVoiceToast(
+          success: false,
+          message: "Didn't catch that.",
+          suggestion: "Use wake phrase '$wake' first.",
+        );
+        return;
+      }
+      parserText = parserText.replaceAll(RegExp('\\b$wake\\b'), '').trim();
+    }
+
+    final rehearsalMarks = _controller.playback.score?.rehearsalMarks ?? const <String, int>{};
+    final parsed = _voiceParser.parse(
+      parserText,
+      rehearsalMarks: rehearsalMarks,
+    );
+    if (!parsed.isSuccess || parsed.intent == null) {
+      _showVoiceToast(
+        success: false,
+        message: parsed.message,
+        suggestion: parsed.suggestion,
+      );
+      return;
+    }
+
+    final commandResult = await _applyMainVoiceIntent(parsed.intent!);
+    if (!commandResult.applied) {
+      _showVoiceToast(
+        success: false,
+        message: commandResult.message,
+        suggestion: commandResult.suggestion,
+      );
+      return;
+    }
+    _showVoiceToast(
+      success: true,
+      message: commandResult.message.isNotEmpty ? commandResult.message : parsed.message,
+      suggestion: null,
+    );
+  }
+
+  Future<CommandExecutionResult> _applyMainVoiceIntent(VoiceIntent intent) async {
+    final command = intentToCommand(
+      intent,
+      currentMeasure: _controller.playback.currentMeasure,
+    );
+    if (command == null) {
+      return const CommandExecutionResult(
+        applied: false,
+        message: "Didn't catch that.",
+      );
+    }
+    return _controller.applyCommand(command);
+  }
+
+  void _showVoiceToast({
+    required bool success,
+    required String message,
+    String? suggestion,
+  }) {
+    final icon = success ? '✅' : '❌';
+    final text = suggestion == null ? '$icon $message' : '$icon $message  $suggestion';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+          content: Text(text),
+        ),
+      );
+  }
+}
+
+class _PttHoldButton extends StatelessWidget {
+  const _PttHoldButton({
+    required this.size,
+    required this.isListening,
+    required this.onPressStart,
+    required this.onPressEnd,
+    required this.semanticsLabel,
+  });
+
+  final double size;
+  final bool isListening;
+  final Future<void> Function() onPressStart;
+  final Future<void> Function() onPressEnd;
+  final String semanticsLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: semanticsLabel,
+      child: Listener(
+        onPointerDown: (_) {
+          unawaited(onPressStart());
+        },
+        onPointerUp: (_) {
+          unawaited(onPressEnd());
+        },
+        onPointerCancel: (_) {
+          unawaited(onPressEnd());
+        },
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: isListening ? Colors.redAccent : const Color(0xFF7C4DFF),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: isListening ? Colors.white : Colors.white38,
+              width: 2,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black54,
+                blurRadius: 8,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Icon(
+            Icons.mic,
+            size: size * 0.5,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VoiceStatusPill extends StatelessWidget {
+  const _VoiceStatusPill({
+    required this.isListening,
+    required this.isProcessing,
+  });
+
+  final bool isListening;
+  final bool isProcessing;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = isListening
+        ? 'Listening...'
+        : isProcessing
+        ? 'Processing...'
+        : '';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: isListening ? Colors.redAccent : Colors.blueGrey,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+class _VoiceSafetyCard extends StatelessWidget {
+  const _VoiceSafetyCard({
+    required this.choirRoomMode,
+    required this.requireWakePhrase,
+    required this.wakePhrase,
+    required this.confidenceThreshold,
+    required this.permissionGranted,
+    required this.onChoirRoomModeChanged,
+    required this.onRequireWakePhraseChanged,
+    required this.onWakePhraseChanged,
+  });
+
+  final bool choirRoomMode;
+  final bool requireWakePhrase;
+  final String wakePhrase;
+  final double confidenceThreshold;
+  final bool permissionGranted;
+  final ValueChanged<bool> onChoirRoomModeChanged;
+  final ValueChanged<bool> onRequireWakePhraseChanged;
+  final ValueChanged<String> onWakePhraseChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF1A1A1A),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Voice Command Safety',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Choir Room Mode'),
+                    subtitle: Text(
+                      'Confidence >= ${(confidenceThreshold * 100).toStringAsFixed(0)}%',
+                    ),
+                    value: choirRoomMode,
+                    onChanged: onChoirRoomModeChanged,
+                  ),
+                ),
+                Text(
+                  permissionGranted ? 'Voice ready' : 'No permission',
+                  style: TextStyle(
+                    color: permissionGranted ? Colors.greenAccent : Colors.orangeAccent,
+                  ),
+                ),
+              ],
+            ),
+            if (choirRoomMode) ...[
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Require wake phrase'),
+                value: requireWakePhrase,
+                onChanged: onRequireWakePhraseChanged,
+              ),
+              if (requireWakePhrase)
+                Row(
+                  children: [
+                    const Text('Wake phrase:'),
+                    const SizedBox(width: 12),
+                    DropdownButton<String>(
+                      value: wakePhrase,
+                      items: const [
+                        DropdownMenuItem(value: 'Podium', child: Text('Podium')),
+                        DropdownMenuItem(value: 'Maestro', child: Text('Maestro')),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          onWakePhraseChanged(value);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _CurrentStatusCard extends StatelessWidget {
@@ -388,6 +1125,7 @@ class _CurrentStatusCard extends StatelessWidget {
     required this.tempoPercent,
     required this.loopA,
     required this.loopB,
+    required this.loopArmed,
     required this.isPlaying,
   });
 
@@ -395,6 +1133,7 @@ class _CurrentStatusCard extends StatelessWidget {
   final double tempoPercent;
   final int? loopA;
   final int? loopB;
+  final bool loopArmed;
   final bool isPlaying;
 
   @override
@@ -423,9 +1162,56 @@ class _CurrentStatusCard extends StatelessWidget {
               ),
             ),
             Text(
-              'Loop ${loopA?.toString() ?? '-'} → ${loopB?.toString() ?? '-'}',
+              'Loop ${loopA?.toString() ?? '-'} -> ${loopB?.toString() ?? '-'}',
               style: const TextStyle(fontSize: 22),
             ),
+            Text(
+              loopArmed ? 'Loop Armed' : 'Loop Disarmed',
+              style: TextStyle(
+                fontSize: 20,
+                color: loopArmed ? Colors.greenAccent : Colors.white60,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ClassSessionStatusCard extends StatelessWidget {
+  const _ClassSessionStatusCard({
+    required this.session,
+  });
+
+  final ClassSessionState session;
+
+  @override
+  Widget build(BuildContext context) {
+    final connectedStations = session.stationRuntimeById.values
+        .where((runtime) => runtime.connected)
+        .length;
+    final activeStudents = session.stationRuntimeById.values
+        .where((runtime) => runtime.activeStudentName != null)
+        .length;
+    return Card(
+      color: const Color(0xFF1A2530),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            Text(
+              session.className.isEmpty ? 'Class Session Active' : session.className,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+            ),
+            Text(
+              'Session ${session.sessionId.length > 8 ? session.sessionId.substring(0, 8) : session.sessionId}...',
+            ),
+            Text('Stations: ${session.stationsById.length}'),
+            Text('Active students: $activeStudents'),
+            Text('Connected stations: $connectedStations'),
           ],
         ),
       ),
@@ -486,12 +1272,22 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
   final TextEditingController _manualHostController = TextEditingController();
   final TextEditingController _searchMeasureController = TextEditingController();
   final List<int> _recentMeasures = [];
+  final VoicePttService _voiceService = VoicePttService();
+  final VoiceCommandParser _voiceParser = VoiceCommandParser();
+
+  bool _voicePermissionGranted = false;
+  bool _isPttListening = false;
+  bool _isPttProcessing = false;
+  bool _choirRoomMode = false;
+  bool _requireWakePhraseInChoirMode = true;
+  String _wakePhrase = 'Podium';
 
   @override
   void initState() {
     super.initState();
     unawaited(_client.startDiscovery());
     _client.addListener(_attemptAutoConnect);
+    unawaited(_initializeVoice());
   }
 
   @override
@@ -501,6 +1297,16 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
     _manualHostController.dispose();
     _searchMeasureController.dispose();
     super.dispose();
+  }
+
+  Future<void> _initializeVoice() async {
+    final granted = await _voiceService.requestPermissions();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _voicePermissionGranted = granted;
+    });
   }
 
   @override
@@ -514,6 +1320,41 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
           child: Scaffold(
             appBar: AppBar(
               title: const Text('Phone Remote'),
+              actions: [
+                IconButton(
+                  tooltip: 'Voice commands help',
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const VoiceCommandsHelpScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.help_outline),
+                ),
+                if (_isPttListening || _isPttProcessing)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Center(
+                      child: _VoiceStatusPill(
+                        isListening: _isPttListening,
+                        isProcessing: _isPttProcessing,
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: Center(
+                    child: _PttHoldButton(
+                      size: 50,
+                      isListening: _isPttListening,
+                      onPressStart: _handleVoicePressStart,
+                      onPressEnd: _handleVoicePressEnd,
+                      semanticsLabel: 'Hold to talk on remote',
+                    ),
+                  ),
+                ),
+              ],
               bottom: const TabBar(
                 tabs: [
                   Tab(text: 'Measures'),
@@ -530,6 +1371,26 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
                   manualHostController: _manualHostController,
                   recentMeasures: _recentMeasures,
                   onJumpMeasure: _jumpToMeasure,
+                  choirRoomMode: _choirRoomMode,
+                  requireWakePhrase: _requireWakePhraseInChoirMode,
+                  wakePhrase: _wakePhrase,
+                  confidenceThreshold: _minimumConfidence,
+                  permissionGranted: _voicePermissionGranted,
+                  onChoirRoomModeChanged: (value) {
+                    setState(() {
+                      _choirRoomMode = value;
+                    });
+                  },
+                  onRequireWakePhraseChanged: (value) {
+                    setState(() {
+                      _requireWakePhraseInChoirMode = value;
+                    });
+                  },
+                  onWakePhraseChanged: (value) {
+                    setState(() {
+                      _wakePhrase = value;
+                    });
+                  },
                 ),
                 _PartsTab(
                   state: state,
@@ -608,6 +1469,243 @@ class _PhoneRemoteScreenState extends State<PhoneRemoteScreen> {
     }
     setState(() {});
   }
+
+  double get _minimumConfidence => _choirRoomMode ? 0.62 : 0.35;
+
+  Future<void> _handleVoicePressStart() async {
+    if (_isPttListening || _isPttProcessing) {
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    if (!_voicePermissionGranted) {
+      final granted = await _voiceService.requestPermissions();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _voicePermissionGranted = granted;
+      });
+      if (!granted) {
+        _showVoiceToast(
+          success: false,
+          message: 'Speech permission denied.',
+          suggestion: 'Enable microphone + speech permissions in Settings.',
+        );
+        return;
+      }
+    }
+
+    final started = await _voiceService.startListening(
+      preferOffline: true,
+      allowStandardFallback: true,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (!started.started) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: started.message,
+      );
+      return;
+    }
+    setState(() {
+      _isPttListening = true;
+    });
+  }
+
+  Future<void> _handleVoicePressEnd() async {
+    if (!_isPttListening) {
+      return;
+    }
+    HapticFeedback.selectionClick();
+    setState(() {
+      _isPttListening = false;
+      _isPttProcessing = true;
+    });
+
+    final stopResult = await _voiceService.stopListening();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isPttProcessing = false;
+    });
+
+    if (!_client.isConnected) {
+      _showVoiceToast(
+        success: false,
+        message: 'Remote not connected.',
+        suggestion: 'Connect to the main player first.',
+      );
+      return;
+    }
+
+    final normalized = normalizeTranscript(stopResult.transcript);
+    if (normalized.isEmpty) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try: 'measure 32'.",
+      );
+      return;
+    }
+    if (stopResult.confidence < _minimumConfidence) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try again clearly: 'go to measure 32'.",
+      );
+      return;
+    }
+
+    var parserText = normalized;
+    if (_choirRoomMode && _requireWakePhraseInChoirMode) {
+      final wake = _wakePhrase.toLowerCase();
+      final hasWakePhrase = parserText.contains(wake);
+      if (!hasWakePhrase) {
+        _showVoiceToast(
+          success: false,
+          message: "Didn't catch that.",
+          suggestion: "Use wake phrase '$wake' first.",
+        );
+        return;
+      }
+      parserText = parserText.replaceAll(RegExp('\\b$wake\\b'), '').trim();
+    }
+
+    final state = RemoteState.fromMap(_client.latestState);
+    final parsed = _voiceParser.parse(
+      parserText,
+      rehearsalMarks: state.rehearsalMarks,
+    );
+    if (!parsed.isSuccess || parsed.intent == null) {
+      _showVoiceToast(
+        success: false,
+        message: parsed.message,
+        suggestion: parsed.suggestion,
+      );
+      return;
+    }
+
+    final appliedMessage = _applyRemoteVoiceIntent(parsed.intent!, state);
+    if (appliedMessage == null) {
+      _showVoiceToast(
+        success: false,
+        message: "Didn't catch that.",
+        suggestion: "Try: 'play' or 'measure 32'.",
+      );
+      return;
+    }
+    _showVoiceToast(
+      success: true,
+      message: appliedMessage,
+      suggestion: null,
+    );
+  }
+
+  String? _applyRemoteVoiceIntent(VoiceIntent intent, RemoteState state) {
+    final command = intentToCommand(intent, currentMeasure: state.currentMeasure);
+    if (command == null) {
+      return null;
+    }
+
+    if (command['type'] == 'JUMP_TO_MEASURE') {
+      final rawMeasure = _parseInt(command['measure']);
+      if (rawMeasure != null && state.measures.isNotEmpty) {
+        final clamped = _clampToKnownMeasure(rawMeasure, state.measures);
+        command['measure'] = clamped;
+        _client.sendCommand(command);
+        if (rawMeasure != clamped) {
+          return 'Clamped to m.$clamped';
+        }
+        return 'Jump to measure $clamped';
+      }
+    }
+
+    _client.sendCommand(command);
+    return _describeRemoteCommand(command, state);
+  }
+
+  int _clampToKnownMeasure(int requested, List<int> measures) {
+    if (measures.isEmpty) {
+      return requested;
+    }
+    if (measures.contains(requested)) {
+      return requested;
+    }
+    var closest = measures.first;
+    var distance = (closest - requested).abs();
+    for (final measure in measures) {
+      final candidate = (measure - requested).abs();
+      if (candidate < distance) {
+        closest = measure;
+        distance = candidate;
+      }
+    }
+    return closest;
+  }
+
+  String _describeRemoteCommand(Map<String, dynamic> command, RemoteState state) {
+    switch (command['type']) {
+      case 'PLAY':
+        return 'Play';
+      case 'PAUSE':
+        return 'Pause';
+      case 'JUMP_TO_MEASURE':
+        return 'Jump to measure ${command['measure']}';
+      case 'JUMP_RELATIVE':
+        final delta = _parseInt(command['deltaMeasures']) ?? 0;
+        return delta < 0 ? 'Back ${delta.abs()}' : 'Forward $delta';
+      case 'SET_TEMPO':
+        return 'Tempo ${(_parseDouble(command['percent']) ?? state.tempoPercent).round()}%';
+      case 'SET_TEMPO_ADJUST':
+        final delta = _parseInt(command['delta']) ?? 0;
+        return delta < 0 ? 'Tempo slower' : 'Tempo faster';
+      case 'SET_LOOP_A':
+        return 'Set loop A';
+      case 'SET_LOOP_B':
+        return 'Set loop B';
+      case 'SET_LOOP_RANGE':
+        return 'Loop measures ${command['a']} to ${command['b']}';
+      case 'LOOP_ARM_TOGGLE':
+        return state.loopArmed ? 'Loop disarmed' : 'Loop armed';
+      case 'CLEAR_LOOP':
+        return 'Clear loop';
+      case 'SET_MIX_PRESET':
+        if (command['preset'] == 'all') {
+          return 'All parts on';
+        }
+        return 'Parts updated';
+      case 'SET_PART_ENABLED':
+        final part = command['part']?.toString() ?? '';
+        final enabled = command['enabled'] == true;
+        return '$part ${enabled ? 'on' : 'off'}';
+      case 'PLAY_STARTING_PITCHES':
+        return 'Play starting pitches';
+      default:
+        return 'Command sent';
+    }
+  }
+
+  void _showVoiceToast({
+    required bool success,
+    required String message,
+    String? suggestion,
+  }) {
+    final icon = success ? '✅' : '❌';
+    final text = suggestion == null ? '$icon $message' : '$icon $message  $suggestion';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+          content: Text(text),
+        ),
+      );
+  }
 }
 
 class _MeasuresTab extends StatelessWidget {
@@ -618,6 +1716,14 @@ class _MeasuresTab extends StatelessWidget {
     required this.manualHostController,
     required this.recentMeasures,
     required this.onJumpMeasure,
+    required this.choirRoomMode,
+    required this.requireWakePhrase,
+    required this.wakePhrase,
+    required this.confidenceThreshold,
+    required this.permissionGranted,
+    required this.onChoirRoomModeChanged,
+    required this.onRequireWakePhraseChanged,
+    required this.onWakePhraseChanged,
   });
 
   final RemoteState state;
@@ -626,6 +1732,14 @@ class _MeasuresTab extends StatelessWidget {
   final TextEditingController manualHostController;
   final List<int> recentMeasures;
   final ValueChanged<int> onJumpMeasure;
+  final bool choirRoomMode;
+  final bool requireWakePhrase;
+  final String wakePhrase;
+  final double confidenceThreshold;
+  final bool permissionGranted;
+  final ValueChanged<bool> onChoirRoomModeChanged;
+  final ValueChanged<bool> onRequireWakePhraseChanged;
+  final ValueChanged<String> onWakePhraseChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -637,6 +1751,17 @@ class _MeasuresTab extends StatelessWidget {
           Text(
             client.connectionStatus ?? 'Searching for player...',
             style: const TextStyle(fontSize: 16, color: Colors.white70),
+          ),
+          const SizedBox(height: 8),
+          _VoiceSafetyCard(
+            choirRoomMode: choirRoomMode,
+            requireWakePhrase: requireWakePhrase,
+            wakePhrase: wakePhrase,
+            confidenceThreshold: confidenceThreshold,
+            permissionGranted: permissionGranted,
+            onChoirRoomModeChanged: onChoirRoomModeChanged,
+            onRequireWakePhraseChanged: onRequireWakePhraseChanged,
+            onWakePhraseChanged: onWakePhraseChanged,
           ),
           const SizedBox(height: 8),
           Wrap(
@@ -869,8 +1994,10 @@ class RemoteState {
     required this.currentMeasure,
     required this.loopA,
     required this.loopB,
+    required this.loopArmed,
     required this.enabledPartIds,
     required this.measures,
+    required this.rehearsalMarks,
   });
 
   final bool loaded;
@@ -879,8 +2006,10 @@ class RemoteState {
   final int currentMeasure;
   final int? loopA;
   final int? loopB;
+  final bool loopArmed;
   final Set<String> enabledPartIds;
   final List<int> measures;
+  final Map<String, int> rehearsalMarks;
 
   factory RemoteState.fromMap(Map<String, dynamic>? raw) {
     if (raw == null) {
@@ -888,6 +2017,7 @@ class RemoteState {
     }
     final enabledPartsRaw = raw['enabledParts'];
     final measuresRaw = raw['measures'];
+    final rehearsalMarksRaw = raw['rehearsalMarks'];
     return RemoteState(
       loaded: raw['loaded'] == true,
       isPlaying: raw['isPlaying'] == true,
@@ -895,6 +2025,7 @@ class RemoteState {
       currentMeasure: _parseInt(raw['currentMeasure']) ?? 1,
       loopA: _parseInt(raw['loopA']),
       loopB: _parseInt(raw['loopB']),
+      loopArmed: raw['loopArmed'] == true,
       enabledPartIds: enabledPartsRaw is List
           ? enabledPartsRaw.map((entry) => entry.toString()).toSet()
           : <String>{},
@@ -904,6 +2035,18 @@ class RemoteState {
                 .whereType<int>()
                 .toList()
           : <int>[],
+      rehearsalMarks: rehearsalMarksRaw is Map
+          ? Map<String, int>.fromEntries(
+              rehearsalMarksRaw.entries
+                  .map(
+                    (entry) => MapEntry(
+                      entry.key.toString().toUpperCase(),
+                      _parseInt(entry.value) ?? 0,
+                    ),
+                  )
+                  .where((entry) => entry.value > 0),
+            )
+          : <String, int>{},
     );
   }
 
@@ -914,8 +2057,10 @@ class RemoteState {
     currentMeasure: 1,
     loopA: null,
     loopB: null,
+    loopArmed: false,
     enabledPartIds: <String>{},
     measures: <int>[],
+    rehearsalMarks: <String, int>{},
   );
 }
 

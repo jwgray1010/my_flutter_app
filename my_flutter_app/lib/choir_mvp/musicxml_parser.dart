@@ -12,6 +12,7 @@ class MusicXmlParser {
     final partAssignments = _buildPartAssignments(document);
 
     final measureStartByNumber = <int, double>{};
+    final rehearsalMarks = <String, int>{};
     final notes = <ScoreNote>[];
     var totalBeats = 0.0;
     var fallbackMeasureNumber = 1;
@@ -37,6 +38,15 @@ class MusicXmlParser {
         final previousStart = measureStartByNumber[measureNumber];
         if (previousStart == null || measureStart < previousStart) {
           measureStartByNumber[measureNumber] = measureStart;
+        }
+
+        for (final rehearsal in measure.findAllElements('rehearsal')) {
+          final raw = rehearsal.innerText.trim();
+          if (raw.isEmpty) {
+            continue;
+          }
+          // Keep the first occurrence per mark label.
+          rehearsalMarks.putIfAbsent(raw.toUpperCase(), () => measureNumber);
         }
 
         var lastNonChordStart = beatCursor;
@@ -133,6 +143,7 @@ class MusicXmlParser {
       baseBpm: baseBpm,
       totalBeats: finalTotalBeats,
       availableParts: availableParts,
+      rehearsalMarks: rehearsalMarks,
     );
   }
 
