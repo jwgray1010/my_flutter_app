@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "validate:milestone1": "tsx scripts/milestone1_validate.ts",
-    "test:score-structure": "tsx scripts/score-structure.test.ts"
+    "test:score-structure": "tsx scripts/score-structure.test.ts",
+    "test:score-recognition": "tsx scripts/score-recognition.ts development",
+    "test:score-regression": "tsx scripts/score-recognition.ts regression && tsx scripts/score-structure.test.ts",
+    "test:score-report": "tsx scripts/score-recognition.ts all"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

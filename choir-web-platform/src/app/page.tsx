@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { deriveMainChoirVoicing } from "@/lib/choir-voicing";
 import { ScorePlayer, type PlaybackSnapshot } from "@/lib/score-player";
 import type {
   AssignablePartId,
@@ -16,6 +17,7 @@ const PART_BUTTONS: CanonicalPartId[] = [
   "SOPRANO",
   "ALTO",
   "TENOR",
+  "BARITONE",
   "BASS",
   "PIANO",
 ];
@@ -1123,6 +1125,7 @@ export default function Home() {
                             <option value="SOPRANO">Soprano</option>
                             <option value="ALTO">Alto</option>
                             <option value="TENOR">Tenor</option>
+                            <option value="BARITONE">Baritone</option>
                             <option value="BASS">Bass</option>
                             <option value="PIANO">Piano</option>
                             <option value="UNKNOWN">Unassigned</option>
@@ -1482,6 +1485,9 @@ function labelPart(part: CanonicalPartId) {
   if (part === "TENOR") {
     return "Tenor";
   }
+  if (part === "BARITONE") {
+    return "Baritone";
+  }
   if (part === "BASS") {
     return "Bass";
   }
@@ -1540,25 +1546,7 @@ function ScoreStructureSummary({ score }: { score: ParsedScore }) {
 }
 
 function choirFormatLabel(score: ParsedScore) {
-  const vocalParts = new Set(
-    score.parts
-      .filter((part) => part.canonicalPart !== "PIANO" && part.canonicalPart !== "UNKNOWN")
-      .map((part) => part.canonicalPart)
-  );
-  if (!vocalParts.size) {
-    return "Unknown";
-  }
-  const order: CanonicalPartId[] = ["SOPRANO", "ALTO", "TENOR", "BASS"];
-  const initials: Record<string, string> = {
-    SOPRANO: "S",
-    ALTO: "A",
-    TENOR: "T",
-    BASS: "B",
-  };
-  return order
-    .filter((part) => vocalParts.has(part))
-    .map((part) => initials[part])
-    .join("");
+  return deriveMainChoirVoicing(score.parts);
 }
 
 function pianoStatusLabel(score: ParsedScore): "Detected" | "Not Detected" | "Needs Confirmation" {
@@ -1974,6 +1962,9 @@ function partToggleLabel(part: CanonicalPartId) {
   }
   if (part === "TENOR") {
     return "T";
+  }
+  if (part === "BARITONE") {
+    return "BAR";
   }
   if (part === "BASS") {
     return "B";

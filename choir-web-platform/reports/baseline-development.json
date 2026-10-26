@@ -1,0 +1,152 @@
+{
+  "passed": 13,
+  "failed": 13,
+  "total": 26,
+  "checksFailed": 16,
+  "failures": [
+    {
+      "fixtureId": "unison",
+      "set": "development",
+      "category": "voicing",
+      "expected": "UNISON",
+      "actual": "Unknown",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "two-part",
+      "set": "development",
+      "category": "voicing",
+      "expected": "2-PART",
+      "actual": "Unknown",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "ssa",
+      "set": "development",
+      "category": "voicing",
+      "expected": "SSA",
+      "actual": "SA",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "ssaa",
+      "set": "development",
+      "category": "voicing",
+      "expected": "SSAA",
+      "actual": "SA",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "sab",
+      "set": "development",
+      "category": "voicing",
+      "expected": "SAB",
+      "actual": "SA",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "sab",
+      "set": "development",
+      "category": "logical-parts",
+      "expected": "SOPRANO,ALTO,BARITONE",
+      "actual": "SOPRANO,ALTO,UNKNOWN",
+      "probableCause": "Part names were mapped to the wrong logical voice, or unlabeled staves were forced into SATB.",
+      "responsibleFunction": "detectCanonicalPart"
+    },
+    {
+      "fixtureId": "ttbb",
+      "set": "development",
+      "category": "voicing",
+      "expected": "TTBB",
+      "actual": "TB",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "ssaattbb",
+      "set": "development",
+      "category": "voicing",
+      "expected": "SSAATTBB",
+      "actual": "SATB",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "solo-then-choir",
+      "set": "development",
+      "category": "logical-parts",
+      "expected": "SOPRANO,ALTO,TENOR,BASS",
+      "actual": "SOPRANO,SOPRANO,ALTO,TENOR,BASS",
+      "probableCause": "Part names were mapped to the wrong logical voice, or unlabeled staves were forced into SATB.",
+      "responsibleFunction": "detectCanonicalPart"
+    },
+    {
+      "fixtureId": "solo-then-choir",
+      "set": "development",
+      "category": "featured",
+      "expected": "P1:SOPRANO",
+      "actual": "(none)",
+      "probableCause": "Solo or descant text was absorbed into the main choir.",
+      "responsibleFunction": "detectCanonicalPart"
+    },
+    {
+      "fixtureId": "descant",
+      "set": "development",
+      "category": "logical-parts",
+      "expected": "SOPRANO,ALTO,TENOR,BASS",
+      "actual": "UNKNOWN,SOPRANO,ALTO,TENOR,BASS",
+      "probableCause": "Part names were mapped to the wrong logical voice, or unlabeled staves were forced into SATB.",
+      "responsibleFunction": "detectCanonicalPart"
+    },
+    {
+      "fixtureId": "descant",
+      "set": "development",
+      "category": "featured",
+      "expected": "P1:UNKNOWN",
+      "actual": "(none)",
+      "probableCause": "Solo or descant text was absorbed into the main choir.",
+      "responsibleFunction": "detectCanonicalPart"
+    },
+    {
+      "fixtureId": "meter-change",
+      "set": "development",
+      "category": "voicing",
+      "expected": "UNISON",
+      "actual": "Unknown",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "ds-coda",
+      "set": "development",
+      "category": "voicing",
+      "expected": "UNISON",
+      "actual": "Unknown",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "dc-fine",
+      "set": "development",
+      "category": "voicing",
+      "expected": "UNISON",
+      "actual": "Unknown",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    },
+    {
+      "fixtureId": "four-unlabeled",
+      "set": "development",
+      "category": "voicing",
+      "expected": "4-PART",
+      "actual": "Unknown",
+      "probableCause": "Main-choir voicing collapsed duplicate parts or treated a featured line as choir.",
+      "responsibleFunction": "deriveMainChoirVoicing"
+    }
+  ]
+}
