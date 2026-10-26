@@ -2,6 +2,50 @@ import * as Tone from "tone";
 import type { PlaybackVisit } from "@/lib/score-model";
 import type { CanonicalPartId, ParsedScore } from "@/lib/score-types";
 
+// Salamander Grand Piano (Yamaha C5, Alexander Holm, CC-BY 3.0), one
+// recording every major third. The sampler pitch-shifts the gaps.
+const PIANO_SAMPLE_URLS: Record<string, string> = {
+  A0: "A0.mp3",
+  C1: "C1.mp3",
+  "D#1": "Ds1.mp3",
+  "F#1": "Fs1.mp3",
+  A1: "A1.mp3",
+  C2: "C2.mp3",
+  "D#2": "Ds2.mp3",
+  "F#2": "Fs2.mp3",
+  A2: "A2.mp3",
+  C3: "C3.mp3",
+  "D#3": "Ds3.mp3",
+  "F#3": "Fs3.mp3",
+  A3: "A3.mp3",
+  C4: "C4.mp3",
+  "D#4": "Ds4.mp3",
+  "F#4": "Fs4.mp3",
+  A4: "A4.mp3",
+  C5: "C5.mp3",
+  "D#5": "Ds5.mp3",
+  "F#5": "Fs5.mp3",
+  A5: "A5.mp3",
+  C6: "C6.mp3",
+  "D#6": "Ds6.mp3",
+  "F#6": "Fs6.mp3",
+  A6: "A6.mp3",
+  C7: "C7.mp3",
+  "D#7": "Ds7.mp3",
+  "F#7": "Fs7.mp3",
+  A7: "A7.mp3",
+  C8: "C8.mp3",
+};
+
+function createPianoVoice(volumeDb: number) {
+  return new Tone.Sampler({
+    urls: PIANO_SAMPLE_URLS,
+    baseUrl: "/samples/piano/",
+    release: 1.1,
+    volume: volumeDb,
+  }).toDestination();
+}
+
 export interface PlaybackSnapshot {
   isPlaying: boolean;
   isCountingIn: boolean;
@@ -33,38 +77,24 @@ export class ScorePlayer {
 
   private readonly soundedUnison = new Set<string>();
 
-  private readonly synths: Record<CanonicalPartId, Tone.PolySynth<Tone.Synth>> = {
-    SOPRANO: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.25 },
-      volume: -8,
-    }).toDestination(),
-    ALTO: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.25 },
-      volume: -8,
-    }).toDestination(),
-    TENOR: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.25 },
-      volume: -8,
-    }).toDestination(),
-    BASS: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.3 },
-      volume: -8,
-    }).toDestination(),
-    PIANO: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "sine" },
-      envelope: { attack: 0.005, release: 0.45 },
-      volume: -4,
-    }).toDestination(),
-    UNKNOWN: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.25 },
-      volume: -8,
-    }).toDestination(),
+  // Every sung line and the piano part use recorded grand-piano notes.
+  // Each part has its own sampler so simultaneous notes do not steal
+  // voices from each other, and so each part can be balanced on its own.
+  private readonly synths: Record<CanonicalPartId, Tone.Sampler> = {
+    SOPRANO: createPianoVoice(-6),
+    ALTO: createPianoVoice(-6),
+    TENOR: createPianoVoice(-6),
+    BASS: createPianoVoice(-7),
+    PIANO: createPianoVoice(-1),
+    UNKNOWN: createPianoVoice(-6),
   };
+
+  private readonly countInClick = new Tone.MembraneSynth({
+    pitchDecay: 0.008,
+    octaves: 4,
+    envelope: { attack: 0.001, decay: 0.12, sustain: 0, release: 0.04 },
+    volume: -8,
+  }).toDestination();
 
   private readonly listeners = new Set<(snapshot: PlaybackSnapshot) => void>();
   private ticker: ReturnType<typeof setInterval> | null = null;
@@ -120,6 +150,7 @@ export class ScorePlayer {
       return;
     }
     await Tone.start();
+    await Tone.loaded();
     this.initialized = true;
     this.emitSnapshot();
   }
@@ -129,6 +160,7 @@ export class ScorePlayer {
     for (const synth of Object.values(this.synths)) {
       synth.dispose();
     }
+    this.countInClick.dispose();
     this.listeners.clear();
   }
 
@@ -533,9 +565,9 @@ export class ScorePlayer {
   }
 
   private playCountInClick(isDownbeat: boolean) {
-    const frequency = isDownbeat ? 1320 : 880;
-    const volume = isDownbeat ? 0.9 : 0.76;
-    this.synths.UNKNOWN.triggerAttackRelease(frequency, 0.08, Tone.now(), volume);
+    const pitch = isDownbeat ? "C5" : "G4";
+    const velocity = isDownbeat ? 0.9 : 0.62;
+    this.countInClick.triggerAttackRelease(pitch, 0.06, Tone.now(), velocity);
   }
 
   private clearCountInTimer() {

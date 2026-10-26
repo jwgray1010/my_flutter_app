@@ -153,6 +153,10 @@ npx tsx scripts/score-recognition/run.ts --sets development,regression --omr --r
 
 OMR differences are reported on their own. They are not counted as MusicXML fixture passes.
 
+## Audio
+
+Sung lines and the piano part are played with recorded grand-piano notes from `public/samples/piano/`, not a synthesized waveform. These are the Salamander Grand Piano samples, recordings of a Yamaha C5 by Alexander Holm (https://archive.org/details/SalamanderGrandPianoV3), used under Creative Commons Attribution 3.0.
+
 ## Important prototype constraints
 
 - This is a **functional prototype**, not final engraving-accurate notation software.
