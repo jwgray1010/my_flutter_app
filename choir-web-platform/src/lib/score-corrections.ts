@@ -1,3 +1,4 @@
+import { refreshPlayback } from "@/lib/playback-model";
 import { populatePartRanges } from "@/lib/musicxml";
 import type {
   AssignablePartId,
@@ -49,6 +50,7 @@ export function applyManualCorrections(
   }
   next.notes.sort((a, b) => a.startBeat - b.startBeat);
   populatePartRanges(next.parts, next.notes);
+  refreshPlayback(next);
   return next;
 }
 
@@ -172,6 +174,7 @@ function cloneScore(score: ParsedScore): ParsedScore {
     rehearsalMarks: { ...score.rehearsalMarks },
     keyRegions: score.keyRegions?.map((region) => ({ ...region })),
     performanceRoute: score.performanceRoute ? [...score.performanceRoute] : undefined,
+    scoreModel: score.scoreModel ? structuredClone(score.scoreModel) : undefined,
   };
 }
 

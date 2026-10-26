@@ -62,6 +62,7 @@ export async function POST(
         selectedPageNumber && replacementMimeType.toLowerCase().includes("pdf")
           ? [selectedPageNumber]
           : undefined,
+      setup: existing.parsedScore.scoreModel?.scoreSetup,
     });
 
     const preservedCorrections = normalizeManualCorrections(existing.manualCorrections);

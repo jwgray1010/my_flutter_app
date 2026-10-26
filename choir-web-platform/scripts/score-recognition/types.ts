@@ -65,6 +65,16 @@ export interface FixtureSpec {
   timeChanges?: { measure: number; time: TimeSpec }[];
   key: KeySpec;
   keyChanges?: { measure: number; key: KeySpec }[];
+  /** When set, only the first part receives later key elements. */
+  keyChangeScope?: "all" | "first-part";
+  credit?: string;
+  navigation?: { measure: number; marks: Array<"segno" | "coda" | "to-coda" | "ds-al-coda" | "fine" | "dc-al-fine"> }[];
+  routeOverride?: number[];
+  setup?: {
+    choirVoicing: "AUTO" | "UNISON" | "TWO_PART" | "SA" | "SS" | "SSA" | "SSAA" | "SAT" | "SAB" | "SATB" | "TTB" | "TTBB" | "SSAATTBB" | "CUSTOM";
+    accompaniment: "AUTO" | "NONE" | "PIANO" | "OTHER";
+    staffLayout: "AUTO" | "CUSTOM" | "SATB_SHARED_2" | "SATB_SEPARATE_4" | "SSA_SHARED_2" | "SSA_SEPARATE_3" | "SSAA_SHARED_2" | "SSAA_SEPARATE_4" | "SSAATTBB_SHARED_4" | "SSAATTBB_SEPARATE_8";
+  };
   /** Quarter-lengths of measure 1 when it is a written pickup. */
   pickupQuarters?: number;
   repeat?: RepeatSpec;

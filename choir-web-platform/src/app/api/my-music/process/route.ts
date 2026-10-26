@@ -11,6 +11,7 @@ import {
   processFileToParsedScore,
 } from "@/lib/server/score-processing";
 import { emptyManualCorrections } from "@/lib/score-corrections";
+import { parseScoreSetup } from "@/lib/score-model";
 import type { SavedScoreSummary } from "@/lib/score-types";
 
 export const runtime = "nodejs";
@@ -18,18 +19,26 @@ export const maxDuration = 120;
 
 export async function POST(request: Request) {
   const formData = await request.formData();
-  const file = formData.get("file");
-  if (!(file instanceof File)) {
+  const files = formData
+    .getAll("file")
+    .filter((entry): entry is File => entry instanceof File);
+  const file = files[0];
+  if (!file) {
     return NextResponse.json({ message: "No file uploaded." }, { status: 400 });
   }
 
   const extension = extensionFor(file.name);
-  if (!extension) {
+  if (!extension || files.some((entry) => !extensionFor(entry.name))) {
     return NextResponse.json(
       { message: "Unsupported file type. Use JPG, PNG, PDF, XML, or MusicXML." },
       { status: 400 }
     );
   }
+  const setup = parseScoreSetup({
+    choirVoicing: formValue(formData.get("choirVoicing")) as never,
+    accompaniment: formValue(formData.get("accompaniment")) as never,
+    staffLayout: formValue(formData.get("staffLayout")) as never,
+  });
 
   const scoreId = randomUUID();
   const { uploadsDir, audiverisDir } = dataStoragePaths();
@@ -44,12 +53,28 @@ export async function POST(request: Request) {
     const bytes = Buffer.from(await file.arrayBuffer());
     await fs.mkdir(uploadsDir, { recursive: true });
     await fs.writeFile(sourceFilePath, bytes);
+    const additionalFiles = [];
+    for (const [index, extra] of files.slice(1).entries()) {
+      const extraExtension = extensionFor(extra.name);
+      if (!extraExtension) {
+        continue;
+      }
+      const extraPath = path.join(uploadsDir, `${scoreId}-page-${index + 2}.${extraExtension}`);
+      await fs.writeFile(extraPath, Buffer.from(await extra.arrayBuffer()));
+      additionalFiles.push({
+        filePath: extraPath,
+        originalFileName: extra.name,
+        mimeType: extra.type || mimeFromExtension(extraExtension),
+      });
+    }
 
     const processed = await processFileToParsedScore({
       filePath: sourceFilePath,
       originalFileName: file.name,
       mimeType: sourceMimeType,
       audiverisOutputDir,
+      additionalFiles,
+      setup,
     });
 
     const resolvedTitle =
@@ -72,8 +97,14 @@ export async function POST(request: Request) {
           fileName: file.name,
           mimeType: sourceMimeType,
           filePath: sourceFilePath,
-          pageNumber: null,
+          pageNumber: 1,
         },
+        ...additionalFiles.map((extra, index) => ({
+          fileName: extra.originalFileName,
+          mimeType: extra.mimeType,
+          filePath: extra.filePath,
+          pageNumber: index + 2,
+        })),
       ],
       recognizedMusicXml: processed.musicXml,
       parsedScore: {
@@ -123,6 +154,10 @@ export async function POST(request: Request) {
     await fs.rm(audiverisOutputDir, { recursive: true, force: true }).catch(() => {});
     return NextResponse.json({ message }, { status: 500 });
   }
+}
+
+function formValue(value: FormDataEntryValue | null) {
+  return typeof value === "string" ? value : "AUTO";
 }
 
 function mimeFromExtension(extension: string) {

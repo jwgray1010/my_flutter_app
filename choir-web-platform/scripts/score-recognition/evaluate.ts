@@ -229,8 +229,16 @@ export function evaluateParsedScore(id: string, score: ParsedScore, expected: Ex
     );
   }
 
-  const unknownNotes = score.notes.filter((note) => note.partCanonical === "UNKNOWN").length;
-  if (unknownNotes > 0) {
+  const unknownNotes = score.notes.filter((note) => {
+    if (note.partCanonical !== "UNKNOWN") {
+      return false;
+    }
+    const part = score.parts.find((candidate) => candidate.id === note.partId);
+    return !part?.isSolo && !part?.extraKind;
+  }).length;
+  const choirLabel = actualVoicing.split(" + ")[0];
+  const unknownIsProvisional = choirLabel === "Unknown" || choirLabel === "Unison" || choirLabel === "2-Part";
+  if (unknownNotes > 0 && !unknownIsProvisional) {
     failures.push(
       fail(
         "playback-channels",

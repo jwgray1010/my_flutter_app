@@ -28,6 +28,13 @@ export async function POST(
       originalFileName: existing.sourceFileName,
       mimeType: existing.sourceMimeType,
       audiverisOutputDir: path.join(/* turbopackIgnore: true */ audiverisDir, id),
+      additionalFiles: existing.sourceFiles.slice(1).map((file) => ({
+        filePath: file.filePath,
+        originalFileName: file.fileName,
+        mimeType: file.mimeType,
+      })),
+      setup: existing.parsedScore.scoreModel?.scoreSetup,
+      sourceUploadType: existing.parsedScore.scoreModel?.sourceUploadType,
     });
     const preservedCorrections = normalizeManualCorrections(existing.manualCorrections);
     const correctedScore = applyManualCorrections(processed.parsedScore, preservedCorrections);
