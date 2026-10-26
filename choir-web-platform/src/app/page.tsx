@@ -13,6 +13,7 @@ import {
   type PlaybackChannel,
   type StaffLayoutId,
 } from "@/lib/score-model";
+import { readApiJson, resolveRecognitionResult } from "@/lib/read-api-json";
 import type {
   AssignablePartId,
   CanonicalPartId,
@@ -188,7 +189,7 @@ export default function Home() {
     try {
       setSavedMusicLoading(true);
       const response = await fetch("/api/my-music");
-      const body = (await response.json()) as { items?: SavedScoreSummary[]; message?: string };
+      const body = (await readApiJson(response)) as { items?: SavedScoreSummary[]; message?: string };
       if (!response.ok) {
         throw new Error(body.message ?? "Failed to load My Music.");
       }
@@ -205,7 +206,7 @@ export default function Home() {
     let isCancelled = false;
     void fetch("/api/my-music")
       .then(async (response) => {
-        const body = (await response.json()) as { items?: SavedScoreSummary[]; message?: string };
+        const body = (await readApiJson(response)) as { items?: SavedScoreSummary[]; message?: string };
         if (!response.ok) {
           throw new Error(body.message ?? "Failed to load My Music.");
         }
@@ -272,7 +273,7 @@ export default function Home() {
   const fetchSavedScoreRecord = useCallback(
     async (id: string) => {
       const response = await fetch(`/api/my-music/${id}`);
-      const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+      const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
       if (!response.ok || !body.item) {
         throw new Error(body.message ?? "Could not load saved score.");
       }
@@ -307,14 +308,14 @@ export default function Home() {
         method: "POST",
         body: formData,
       });
-      const body = (await response.json()) as {
+      const body = await resolveRecognitionResult<{
         message?: string;
         diagnostics?: OMRDiagnostics;
         parsedScore?: ParsedScore;
         savedScore?: SavedScoreSummary;
         warnings?: string[];
-      };
-      if (!response.ok || !body.parsedScore || !body.savedScore) {
+      }>(response);
+      if (!body.parsedScore || !body.savedScore) {
         throw new Error(body.message ?? "Recognition failed.");
       }
       const savedRecord = await fetchSavedScoreRecord(body.savedScore.id);
@@ -371,7 +372,7 @@ export default function Home() {
       }
       return;
     }
-    const body = (await response.json()) as { message?: string };
+    const body = (await readApiJson(response)) as { message?: string };
     setError(body.message ?? "Failed to rename score.");
   };
 
@@ -382,16 +383,28 @@ export default function Home() {
     if (!confirmed) {
       return;
     }
-    const response = await fetch(`/api/my-music/${item.id}/reprocess`, { method: "POST" });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
-    if (!response.ok || !body.item) {
-      setError(body.message ?? "Failed to reprocess score.");
-      return;
-    }
-    setFeedbackMessage("Score reprocessed.");
-    await refreshSavedMusic();
-    if (currentScoreId === item.id) {
-      hydrateFromSavedRecord(body.item, activePanel === "check-score" ? "check-score" : "review");
+    setError(null);
+    setFeedbackMessage("Processing. A long score can take several minutes. Keep this tab open.");
+    setIsBusy(true);
+    try {
+      const response = await fetch(`/api/my-music/${item.id}/reprocess`, { method: "POST" });
+      const body = await resolveRecognitionResult<{ item?: SavedScoreRecord; message?: string }>(response);
+      if (!body.item) {
+        setFeedbackMessage(null);
+        setError(body.message ?? "Failed to reprocess score.");
+        return;
+      }
+      setFeedbackMessage("Score reprocessed.");
+      await refreshSavedMusic();
+      if (currentScoreId === item.id) {
+        hydrateFromSavedRecord(body.item, activePanel === "check-score" ? "check-score" : "review");
+      }
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Failed to reprocess score.";
+      setFeedbackMessage(null);
+      setError(message);
+    } finally {
+      setIsBusy(false);
     }
   };
 
@@ -414,21 +427,33 @@ export default function Home() {
     if (Number.isFinite(pageNumber) && pageNumber > 0) {
       formData.append("pageNumber", String(Math.round(pageNumber)));
     }
-    const response = await fetch(`/api/my-music/${replaceTargetId}/replace-pages`, {
-      method: "POST",
-      body: formData,
-    });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
-    if (!response.ok || !body.item) {
-      setError(body.message ?? "Failed to replace score pages.");
-      return;
+    setError(null);
+    setFeedbackMessage("Processing. A long score can take several minutes. Keep this tab open.");
+    setIsBusy(true);
+    try {
+      const response = await fetch(`/api/my-music/${replaceTargetId}/replace-pages`, {
+        method: "POST",
+        body: formData,
+      });
+      const body = await resolveRecognitionResult<{ item?: SavedScoreRecord; message?: string }>(response);
+      if (!body.item) {
+        setFeedbackMessage(null);
+        setError(body.message ?? "Failed to replace score pages.");
+        return;
+      }
+      setFeedbackMessage("Pages replaced and score reprocessed.");
+      await refreshSavedMusic();
+      if (currentScoreId === replaceTargetId) {
+        hydrateFromSavedRecord(body.item, activePanel === "check-score" ? "check-score" : "review");
+      }
+      setReplaceTargetId(null);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Failed to replace score pages.";
+      setFeedbackMessage(null);
+      setError(message);
+    } finally {
+      setIsBusy(false);
     }
-    setFeedbackMessage("Pages replaced and score reprocessed.");
-    await refreshSavedMusic();
-    if (currentScoreId === replaceTargetId) {
-      hydrateFromSavedRecord(body.item, activePanel === "check-score" ? "check-score" : "review");
-    }
-    setReplaceTargetId(null);
   };
 
   const deleteSavedScore = async (item: SavedScoreSummary) => {
@@ -437,7 +462,7 @@ export default function Home() {
     }
     const response = await fetch(`/api/my-music/${item.id}`, { method: "DELETE" });
     if (!response.ok) {
-      const body = (await response.json()) as { message?: string };
+      const body = (await readApiJson(response)) as { message?: string };
       setError(body.message ?? "Failed to delete score.");
       return;
     }
@@ -518,7 +543,7 @@ export default function Home() {
         targetId: correctionScope === "SYSTEM" ? "1" : correctionScope === "LAYOUT_REGION" ? "layout-1" : null,
       }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not save the correction.");
       return;
@@ -599,7 +624,7 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "updateAssignments", assignments }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not update part assignment.");
       return;
@@ -630,7 +655,7 @@ export default function Home() {
         displayNumber: Math.round(shouldBe),
       }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not save measure numbering.");
       return;
@@ -657,7 +682,7 @@ export default function Home() {
         displayNumber: Math.round(shouldBe),
       }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not save starting measure.");
       return;
@@ -686,7 +711,7 @@ export default function Home() {
         note: boundaryNote || "Measure boundary is wrong",
       }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not flag measure boundary.");
       return;
@@ -723,7 +748,7 @@ export default function Home() {
         events,
       }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not save measure edits.");
       return;
@@ -1058,8 +1083,7 @@ export default function Home() {
                   PROCESSING MUSIC... ({processingElapsedSeconds}s)
                 </p>
                 <p className="mt-1 text-xs text-cyan-100">
-                  Multi-page PDFs and larger files can take a minute or more. This is normal —
-                  please keep this tab open and wait for it to finish.
+                  Multi-page PDFs can take several minutes. Keep this tab open until this finishes.
                 </p>
               </div>
             ) : null}

@@ -5,8 +5,9 @@ import {
   getSavedScoreById,
   persistSavedScore,
 } from "@/lib/server/my-music-db";
+import { startRecognitionJob } from "@/lib/server/recognition-jobs";
 import { applyManualCorrections, normalizeManualCorrections } from "@/lib/score-corrections";
-import { processFileToParsedScore } from "@/lib/server/score-processing";
+import { extensionFor, processFileToParsedScore } from "@/lib/server/score-processing";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -19,6 +20,26 @@ export async function POST(
   const existing = getSavedScoreById(id);
   if (!existing) {
     return NextResponse.json({ message: "Score not found." }, { status: 404 });
+  }
+
+  const extension = extensionFor(existing.sourceFileName);
+  const needsOmr = extension != null && extension !== "xml" && extension !== "musicxml";
+  if (needsOmr) {
+    const jobId = startRecognitionJob(() => reprocessScore(id));
+    return NextResponse.json(
+      { jobId, status: "running", message: "Recognition started." },
+      { status: 202 }
+    );
+  }
+
+  const result = await reprocessScore(id);
+  return NextResponse.json(result.body, { status: result.status });
+}
+
+async function reprocessScore(id: string) {
+  const existing = getSavedScoreById(id);
+  if (!existing) {
+    return { status: 404, body: { message: "Score not found." } };
   }
 
   try {
@@ -81,15 +102,17 @@ export async function POST(
       lastUsedTempoPercent: existing.lastUsedTempoPercent,
     });
 
-    return NextResponse.json({
-      message:
-        "Score reprocessed. Manual corrections were preserved where possible.",
-      item: record,
-    });
+    return {
+      status: 200,
+      body: {
+        message: "Score reprocessed. Manual corrections were preserved where possible.",
+        item: record,
+      },
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to reprocess score.";
     console.error("[my-music/reprocess] Recognition failed:", error);
-    return NextResponse.json({ message }, { status: 500 });
+    return { status: 500, body: { message } };
   }
 }
 

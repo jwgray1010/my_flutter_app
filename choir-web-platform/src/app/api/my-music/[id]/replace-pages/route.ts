@@ -7,6 +7,7 @@ import {
   persistSavedScore,
 } from "@/lib/server/my-music-db";
 import { applyManualCorrections, normalizeManualCorrections } from "@/lib/score-corrections";
+import { startRecognitionJob } from "@/lib/server/recognition-jobs";
 import {
   extensionFor,
   processFileToParsedScore,
@@ -25,7 +26,15 @@ export async function POST(
     return NextResponse.json({ message: "Score not found." }, { status: 404 });
   }
 
-  const formData = await request.formData();
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch {
+    return NextResponse.json(
+      { message: "The upload could not be read. Try the file again." },
+      { status: 400 }
+    );
+  }
   const file = formData.get("file");
   if (!(file instanceof File)) {
     return NextResponse.json({ message: "No replacement file provided." }, { status: 400 });
@@ -37,6 +46,38 @@ export async function POST(
       { message: "Unsupported file type. Use JPG, PNG, PDF, XML, or MusicXML." },
       { status: 400 }
     );
+  }
+
+  const needsOmr = extension !== "xml" && extension !== "musicxml";
+  if (needsOmr) {
+    const jobId = startRecognitionJob(() => replacePages(id, formData));
+    return NextResponse.json(
+      { jobId, status: "running", message: "Recognition started." },
+      { status: 202 }
+    );
+  }
+
+  const result = await replacePages(id, formData);
+  return NextResponse.json(result.body, { status: result.status });
+}
+
+async function replacePages(id: string, formData: FormData) {
+  const existing = getSavedScoreById(id);
+  if (!existing) {
+    return { status: 404, body: { message: "Score not found." } };
+  }
+
+  const file = formData.get("file");
+  if (!(file instanceof File)) {
+    return { status: 400, body: { message: "No replacement file provided." } };
+  }
+
+  const extension = extensionFor(file.name);
+  if (!extension) {
+    return {
+      status: 400,
+      body: { message: "Unsupported file type. Use JPG, PNG, PDF, XML, or MusicXML." },
+    };
   }
 
   const pageNumberValue = formData.get("pageNumber");
@@ -113,19 +154,22 @@ export async function POST(
       await fs.rm(oldSourcePath, { force: true });
     }
 
-    return NextResponse.json({
-      message: selectedPageNumber
-        ? `Page ${selectedPageNumber} replaced and reprocessed.`
-        : "Pages replaced and reprocessed.",
-      item: record,
-    });
+    return {
+      status: 200,
+      body: {
+        message: selectedPageNumber
+          ? `Page ${selectedPageNumber} replaced and reprocessed.`
+          : "Pages replaced and reprocessed.",
+        item: record,
+      },
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to replace score pages.";
     console.error("[my-music/replace-pages] Recognition failed:", error);
     if (replacementPath !== oldSourcePath) {
       await fs.rm(replacementPath, { force: true }).catch(() => {});
     }
-    return NextResponse.json({ message }, { status: 500 });
+    return { status: 500, body: { message } };
   }
 }
 

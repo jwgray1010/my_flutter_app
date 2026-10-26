@@ -6,6 +6,7 @@ import {
   dataStoragePaths,
   persistSavedScore,
 } from "@/lib/server/my-music-db";
+import { startRecognitionJob } from "@/lib/server/recognition-jobs";
 import {
   extensionFor,
   processFileToParsedScore,
@@ -17,8 +18,20 @@ import type { SavedScoreSummary } from "@/lib/score-types";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
+function uploadNeedsOmr(extension: string) {
+  return extension !== "xml" && extension !== "musicxml";
+}
+
 export async function POST(request: Request) {
-  const formData = await request.formData();
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch {
+    return NextResponse.json(
+      { message: "The upload could not be read. Try the file again." },
+      { status: 400 }
+    );
+  }
   const files = formData
     .getAll("file")
     .filter((entry): entry is File => entry instanceof File);
@@ -33,6 +46,35 @@ export async function POST(request: Request) {
       { message: "Unsupported file type. Use JPG, PNG, PDF, XML, or MusicXML." },
       { status: 400 }
     );
+  }
+
+  if (files.some((entry) => uploadNeedsOmr(extensionFor(entry.name) ?? ""))) {
+    const jobId = startRecognitionJob(() => runProcess(formData));
+    return NextResponse.json(
+      { jobId, status: "running", message: "Recognition started." },
+      { status: 202 }
+    );
+  }
+
+  const result = await runProcess(formData);
+  return NextResponse.json(result.body, { status: result.status });
+}
+
+async function runProcess(formData: FormData) {
+  const files = formData
+    .getAll("file")
+    .filter((entry): entry is File => entry instanceof File);
+  const file = files[0];
+  if (!file) {
+    return { status: 400, body: { message: "No file uploaded." } };
+  }
+
+  const extension = extensionFor(file.name);
+  if (!extension || files.some((entry) => !extensionFor(entry.name))) {
+    return {
+      status: 400,
+      body: { message: "Unsupported file type. Use JPG, PNG, PDF, XML, or MusicXML." },
+    };
   }
   const setup = parseScoreSetup({
     choirVoicing: formValue(formData.get("choirVoicing")) as never,
@@ -138,21 +180,24 @@ export async function POST(request: Request) {
       recognitionWarnings: record.recognitionWarnings,
     };
 
-    return NextResponse.json({
-      message: "✓ Saved to My Music",
-      savedScore: summary,
-      parsedScore: record.parsedScore,
-      diagnostics: processed.diagnostics,
-      provider: processed.provider,
-      warnings: processed.warnings,
-    });
+    return {
+      status: 200,
+      body: {
+        message: "✓ Saved to My Music",
+        savedScore: summary,
+        parsedScore: record.parsedScore,
+        diagnostics: processed.diagnostics,
+        provider: processed.provider,
+        warnings: processed.warnings,
+      },
+    };
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to process and save score.";
     console.error("[my-music/process] Recognition failed:", error);
     await fs.rm(sourceFilePath, { force: true }).catch(() => {});
     await fs.rm(audiverisOutputDir, { recursive: true, force: true }).catch(() => {});
-    return NextResponse.json({ message }, { status: 500 });
+    return { status: 500, body: { message } };
   }
 }
 
