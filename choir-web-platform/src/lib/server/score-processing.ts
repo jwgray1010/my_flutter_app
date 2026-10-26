@@ -4,7 +4,7 @@ import type { OMRArtifacts } from "@/lib/server/omr/provider";
 import type { OMRDiagnostics, ParsedScore } from "@/lib/score-types";
 import { buildOcrService } from "@/lib/server/omr";
 import { analyzeImageQuality } from "@/lib/server/quality";
-import { rasterizePdfPages } from "@/lib/normalize-pages";
+import { preparePageForOmr, rasterizePdfPages } from "@/lib/normalize-pages";
 import { DEFAULT_SCORE_SETUP, parseScoreSetup, type ScoreSetup, type SourceUploadType } from "@/lib/score-model";
 import { interpretUnifiedScore } from "@/lib/unified-pipeline";
 
@@ -90,6 +90,17 @@ export async function processFileToParsedScore(input: ProcessFileInput): Promise
       }
     }
     pageCount = pagePaths.length;
+    const preparedDir = path.join(input.audiverisOutputDir, "prepared-pages");
+    const preparedPaths: string[] = [];
+    for (let pageIndex = 0; pageIndex < pagePaths.length; pageIndex += 1) {
+      preparedPaths.push(
+        await preparePageForOmr(
+          pagePaths[pageIndex],
+          path.join(preparedDir, `page-${pageIndex + 1}.png`)
+        )
+      );
+    }
+    pagePaths.splice(0, pagePaths.length, ...preparedPaths);
     if (IMAGE_MIME_TYPES.has(files[0].mimeType) || extensionFor(files[0].originalFileName) !== "pdf") {
       try {
         diagnostics = await analyzeImageQuality(pagePaths[0]);
