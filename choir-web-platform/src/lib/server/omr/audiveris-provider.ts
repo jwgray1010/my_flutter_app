@@ -1028,6 +1028,31 @@ async function readPrimaryAudiverisLog(outputDir: string): Promise<string> {
 async function extractMusicXmlAndArtifacts(outputDir: string): Promise<AudiverisExtractedOutput> {
   const files = await listFilesRecursive(outputDir);
   const omrPath = files.find((candidate) => candidate.endsWith(".omr")) ?? null;
+  const pageExports = collectTopLevelPageExports(outputDir, files);
+  if (pageExports.length >= 2) {
+    const pages: Array<{ sheetNumber: number; musicXml: string }> = [];
+    for (const entry of pageExports) {
+      const musicXml = entry.path.endsWith(".mxl")
+        ? await extractMusicXmlFromMxl(entry.path)
+        : await fs.readFile(entry.path, "utf8");
+      if (musicXml.trim()) {
+        pages.push({ sheetNumber: entry.pageNumber, musicXml });
+      }
+    }
+    if (pages.length >= 2) {
+      const combined = mergeMusicXmlPages(pages);
+      const mergedPath = path.join(outputDir, "audiveris-combined-pages.musicxml");
+      await fs.writeFile(mergedPath, combined, "utf8");
+      return {
+        musicXml: combined,
+        artifacts: {
+          audiverisOmrPath: omrPath,
+          audiverisMxlPath: pageExports.find((entry) => entry.path.endsWith(".mxl"))?.path ?? null,
+          audiverisMusicXmlPath: mergedPath,
+        },
+      };
+    }
+  }
   const mxlPath = files.find((candidate) => candidate.endsWith(".mxl")) ?? null;
   const musicXmlPathCandidate = files.find((candidate) => candidate.endsWith(".musicxml")) ?? null;
   const fallbackXmlPath =
@@ -1065,7 +1090,7 @@ async function extractMusicXmlAndArtifacts(outputDir: string): Promise<Audiveris
   };
 }
 
-function mergeMusicXmlPages(pages: Array<{ sheetNumber: number; musicXml: string }>): string {
+export function mergeMusicXmlPages(pages: Array<{ sheetNumber: number; musicXml: string }>): string {
   if (!pages.length) {
     throw new Error("Cannot merge MusicXML pages: no pages were provided.");
   }
@@ -1076,6 +1101,7 @@ function mergeMusicXmlPages(pages: Array<{ sheetNumber: number; musicXml: string
   const parser = new XMLParser({
     ignoreAttributes: false,
     parseTagValue: false,
+    parseAttributeValue: false,
     trimValues: false,
   });
   const builder = new XMLBuilder({
@@ -1129,6 +1155,7 @@ function mergeMusicXmlPages(pages: Array<{ sheetNumber: number; musicXml: string
     }
 
     const parts = asArray<Record<string, unknown>>(root.part);
+    renumberRestartedMeasures(baseParts, parts);
     for (const incomingPart of parts) {
       const id = readAttribute(incomingPart, "id");
       if (!id) {
@@ -1149,6 +1176,68 @@ function mergeMusicXmlPages(pages: Array<{ sheetNumber: number; musicXml: string
   }
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n${builder.build({ "score-partwise": baseRoot })}`;
+}
+
+function collectTopLevelPageExports(outputDir: string, files: string[]) {
+  const byPage = new Map<number, string>();
+  for (const file of files) {
+    if (path.dirname(file) !== outputDir) {
+      continue;
+    }
+    const match = path.basename(file).match(/^page-(\d+)\.(mxl|musicxml)$/i);
+    if (!match) {
+      continue;
+    }
+    const pageNumber = Number(match[1]);
+    const existing = byPage.get(pageNumber);
+    if (!existing || (existing.endsWith(".musicxml") && file.endsWith(".mxl"))) {
+      byPage.set(pageNumber, file);
+    }
+  }
+  return [...byPage.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([pageNumber, filePath]) => ({ pageNumber, path: filePath }));
+}
+
+function renumberRestartedMeasures(
+  existingParts: Record<string, unknown>[],
+  incomingParts: Record<string, unknown>[]
+) {
+  const highest = highestMeasureNumber(existingParts);
+  const grouped = incomingParts.map((part) => asArray<Record<string, unknown>>(part.measure));
+  const count = grouped.reduce((max, measures) => Math.max(max, measures.length), 0);
+  let cursor = highest;
+  for (let index = 0; index < count; index += 1) {
+    const samples = grouped.map((measures) => measures[index]).filter((measure) => measure != null);
+    const proposed = samples
+      .map((measure) => measureNumberOf(measure))
+      .find((number) => number != null);
+    const number = proposed != null && proposed > cursor ? proposed : cursor + 1;
+    cursor = number;
+    for (const measure of samples) {
+      measure["@_number"] = String(number);
+    }
+  }
+}
+
+function highestMeasureNumber(parts: Record<string, unknown>[]) {
+  let highest = 0;
+  for (const part of parts) {
+    for (const measure of asArray<Record<string, unknown>>(part.measure)) {
+      const number = measureNumberOf(measure);
+      if (number != null) {
+        highest = Math.max(highest, number);
+      }
+    }
+  }
+  return highest;
+}
+
+function measureNumberOf(measure: Record<string, unknown>) {
+  const raw = measure["@_number"];
+  const text = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw.trim() : "";
+  const parsed = Number(text);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function asArray<T>(value: unknown): T[] {
