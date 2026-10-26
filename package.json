@@ -1,0 +1,11 @@
+{
+  "name": "rehearsal-keys",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm ci --prefix choir-web-platform && npm run build --prefix choir-web-platform",
+    "start": "npm run start --prefix choir-web-platform"
+  }
+}
