@@ -984,6 +984,7 @@ export default function Home() {
                   <p className="mt-1 text-sm text-zinc-300">
                     Piano: {pianoStatusLabel(loadedScoreRecord.parsedScore)}
                   </p>
+                  <ScoreStructureSummary score={loadedScoreRecord.parsedScore} />
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {PART_BUTTONS.map((part) => {
                       const detected = loadedScoreRecord.parsedScore.parts.filter(
@@ -1497,6 +1498,45 @@ function measureRangeLabel(score: ParsedScore) {
   const start = score.measures[0].displayNumber;
   const end = score.measures[score.measures.length - 1].displayNumber;
   return `${start}–${end}`;
+}
+
+function ScoreStructureSummary({ score }: { score: ParsedScore }) {
+  const structure = score.structure;
+  if (!structure) {
+    return (
+      <p className="mt-2 text-sm text-amber-200">
+        This score was processed with an older recognition system. Reprocess it to read repeats, key
+        regions, and part entrances.
+      </p>
+    );
+  }
+  const key =
+    structure.keySignatureRegions.map((region) => `${region.keySignature} (m.${region.startMeasure})`).join(", ") ||
+    "Not printed";
+  const meter =
+    structure.timeSignatureRegions
+      .map((region) => `${region.timeSignature} (m.${region.startMeasure})`)
+      .join(", ") || "Unknown";
+  const entrances = structure.partActivityRegions
+    .map((region) => `${region.label} — ${region.firstActiveMeasure == null ? "rests" : `m.${region.firstActiveMeasure}`}`)
+    .join(" · ");
+  const navigation = structure.navigationEvents.length
+    ? structure.navigationEvents
+        .map((event) => `${event.kind.split("_").join(" ")} m.${event.measureNumber}`)
+        .join(", ")
+    : "None";
+  return (
+    <div className="mt-3 space-y-1 text-sm text-zinc-300">
+      <p>Pipeline: {structure.pipelineVersion}</p>
+      <p>Key: {key}</p>
+      <p>Meter: {meter}</p>
+      <p>Entrances: {entrances || "None"}</p>
+      <p>
+        Written measures: {structure.writtenMeasures.length} · Performance route: {structure.playbackRoute.length}
+      </p>
+      <p>Navigation: {navigation}</p>
+    </div>
+  );
 }
 
 function choirFormatLabel(score: ParsedScore) {
