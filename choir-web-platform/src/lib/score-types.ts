@@ -23,6 +23,8 @@ export interface RecognizedPart {
   /** True when the canonical assignment came from a pitch-based guess
    * rather than an explicit name/label, so the director should confirm it. */
   needsConfirmation: boolean;
+  /** Solo or descant line kept distinct from the choir voicing. */
+  isSolo?: boolean;
   /** Lowest/highest MIDI pitch actually sung/played by this voice, and the
    * display measure range it appears in - shown to help a director
    * identify which detected voice is which choir part. */
@@ -42,8 +44,17 @@ export interface NoteEvent {
   velocity: number;
 }
 
+export interface KeyRegion {
+  startMeasure: number;
+  fifths: number;
+  mode: "major" | "minor";
+  label: string;
+}
+
 export interface MeasureInfo {
   displayNumber: number;
+  /** Raw MusicXML measure number, including suffixes such as "4a". */
+  displayLabel?: string;
   internalIndex: number;
   startBeat: number;
   endBeat: number;
@@ -59,6 +70,15 @@ export interface ParsedScore {
   measures: MeasureInfo[];
   suggestedTempoBpm: number;
   keySignature: string | null;
+  /** Every written key signature, in order. The first matches keySignature. */
+  keyRegions?: KeyRegion[];
+  /** Structural choir label such as SSA, TTBB, or SA + Solo. */
+  inferredVoicing?: string;
+  /**
+   * Written measure numbers in performance order.
+   * Repeats are listed here and are not copied into measures.
+   */
+  performanceRoute?: number[];
   rehearsalMarks: Record<string, number>;
   rawMusicXml: string;
 }

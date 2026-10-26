@@ -379,7 +379,7 @@ export function getSavedScoreById(id: string): SavedScoreRecord | null {
     audiverisOmrPath: row.audiveris_omr_path,
     audiverisMxlPath: row.audiveris_mxl_path,
     audiverisMusicXmlPath: row.audiveris_musicxml_path,
-    partTextureLabel: buildPartTextureLabel(detectedParts),
+    partTextureLabel: buildPartTextureLabel(detectedParts, parsedScore.inferredVoicing),
     measureCount: parsedScore.measures.length,
     detectedParts,
     lastUsedTempoPercent: row.last_used_tempo_percent,
@@ -485,7 +485,7 @@ function toSummary(row: ScoreRow): SavedScoreSummary {
     title: row.title,
     importedAt: row.imported_at,
     sourceFileName: row.source_filename,
-    partTextureLabel: buildPartTextureLabel(detectedParts),
+    partTextureLabel: buildPartTextureLabel(detectedParts, parsedScore.inferredVoicing),
     measureCount: parsedScore.measures.length,
     detectedParts,
     lastUsedTempoPercent: row.last_used_tempo_percent,
@@ -493,11 +493,16 @@ function toSummary(row: ScoreRow): SavedScoreSummary {
   };
 }
 
-function buildPartTextureLabel(parts: CanonicalPartId[]) {
+function buildPartTextureLabel(parts: CanonicalPartId[], inferredVoicing?: string) {
+  const hasPiano = parts.includes("PIANO");
+  if (inferredVoicing && inferredVoicing !== "Unknown") {
+    return hasPiano && !inferredVoicing.includes("Piano")
+      ? `${inferredVoicing} + Piano`
+      : inferredVoicing;
+  }
   const set = new Set(parts);
   const hasSATB =
     set.has("SOPRANO") && set.has("ALTO") && set.has("TENOR") && set.has("BASS");
-  const hasPiano = set.has("PIANO");
   if (hasSATB && hasPiano) {
     return "SATB + Piano";
   }

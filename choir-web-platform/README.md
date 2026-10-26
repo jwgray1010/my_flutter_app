@@ -131,6 +131,28 @@ http://192.168.x.x:3000
   - parse + auto-save + play
 - PDF currently processes page 1 first in this prototype.
 
+## Recognition test loop
+
+The score tests compare Rehearsal Keys with musical plans that are written down before parsing. They do not use the parser's own output as the answer key.
+
+```bash
+npm run test:score-recognition
+npm run test:score-regression
+npm run test:score-report
+```
+
+`test:score-recognition` scores the development and regression sets. `test:score-regression` scores the regression set only. `test:score-report` also scores the held-out set and writes `reports/recognition-report.md`. Held-out scores are for a final check, not for tuning.
+
+Synthetic fixtures cover unison, SA, SSA, SSAA, SAB, SATB, TB, TTBB, piano, solos, ties, cue notes, clef octave changes, key and meter changes, pickups, and repeats. When Python music21 is installed, the runner also scores four public-domain Bach chorales from the local music21 corpus. Those encodings are not copied into this repository. A chorale is scored only after music21 and a separate MusicXML walk agree.
+
+Printed-page checks render a few synthetic scores and send the image through Audiveris:
+
+```bash
+npx tsx scripts/score-recognition/run.ts --sets development,regression --omr --report
+```
+
+OMR differences are reported on their own. They are not counted as MusicXML fixture passes.
+
 ## Important prototype constraints
 
 - This is a **functional prototype**, not final engraving-accurate notation software.
