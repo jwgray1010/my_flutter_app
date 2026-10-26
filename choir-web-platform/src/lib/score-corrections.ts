@@ -1,4 +1,5 @@
 import { populatePartRanges } from "@/lib/musicxml";
+import { syncScoreStructure } from "@/lib/score-structure";
 import type {
   AssignablePartId,
   CanonicalPartId,
@@ -49,6 +50,7 @@ export function applyManualCorrections(
   }
   next.notes.sort((a, b) => a.startBeat - b.startBeat);
   populatePartRanges(next.parts, next.notes);
+  syncScoreStructure(next);
   return next;
 }
 
@@ -170,6 +172,7 @@ function cloneScore(score: ParsedScore): ParsedScore {
     measures: score.measures.map((measure) => ({ ...measure })),
     notes: score.notes.map((note) => ({ ...note })),
     rehearsalMarks: { ...score.rehearsalMarks },
+    structure: score.structure ? structuredClone(score.structure) : undefined,
   };
 }
 

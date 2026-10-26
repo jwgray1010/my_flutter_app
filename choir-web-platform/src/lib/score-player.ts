@@ -1,5 +1,6 @@
 import * as Tone from "tone";
-import type { CanonicalPartId, ParsedScore } from "@/lib/score-types";
+import type { CanonicalPartId, ParsedScore, PlaybackRouteStep } from "@/lib/score-types";
+import { performanceTimeline } from "@/lib/score-structure";
 
 export interface PlaybackSnapshot {
   isPlaying: boolean;
@@ -76,10 +77,16 @@ export class ScorePlayer {
   private countInBeatsPerMeasure = 4;
   private countInClickIntervalBeats = 1;
   private remainingCountInBeats = 0;
+  private readonly timelineEndBeat: number;
+  private readonly routeSpans: PlaybackRouteStep[];
 
   constructor(score: ParsedScore) {
     this.score = score;
-    this.orderedNotes = [...score.notes].sort((a, b) => a.startBeat - b.startBeat);
+    const performance = performanceTimeline(score);
+    this.orderedNotes = performance?.notes ?? [...score.notes].sort((a, b) => a.startBeat - b.startBeat);
+    const lastMeasure = score.measures[score.measures.length - 1];
+    this.timelineEndBeat = performance?.endBeat ?? lastMeasure?.endBeat ?? 0;
+    this.routeSpans = performance ? (score.structure?.playbackRoute ?? []) : [];
   }
 
   async initialize() {
@@ -152,13 +159,14 @@ export class ScorePlayer {
   }
 
   seekToMeasure(measureNumber: number) {
+    const routeTarget = this.routeSpans.find((step) => step.displayNumber === measureNumber);
     const target = this.score.measures.find(
       (measure) => measure.displayNumber === measureNumber
     );
-    if (!target) {
+    if (!routeTarget && !target) {
       return;
     }
-    this.currentBeat = target.startBeat;
+    this.currentBeat = routeTarget?.performanceStartBeat ?? target?.startBeat ?? 0;
     this.playStartBeat = this.currentBeat;
     this.playStartTimeSec = Tone.now();
     this.nextEventIndex = this.findNextNoteIndex(this.currentBeat);
@@ -335,8 +343,7 @@ export class ScorePlayer {
       );
     }
 
-    const scoreEnd = this.score.measures[this.score.measures.length - 1];
-    if (scoreEnd && this.currentBeat >= scoreEnd.endBeat) {
+    if (this.timelineEndBeat > 0 && this.currentBeat >= this.timelineEndBeat) {
       this.pause();
       this.seekToMeasure(this.score.measures[0]?.displayNumber ?? 1);
       return;
@@ -348,18 +355,22 @@ export class ScorePlayer {
     if (this.loopStartMeasure == null || this.loopEndMeasure == null) {
       return null;
     }
+    const startRoute = this.routeSpans.find((step) => step.displayNumber === this.loopStartMeasure);
+    const endRoute = [...this.routeSpans].reverse().find((step) => step.displayNumber === this.loopEndMeasure);
     const start = this.score.measures.find(
       (measure) => measure.displayNumber === this.loopStartMeasure
     );
     const end = this.score.measures.find(
       (measure) => measure.displayNumber === this.loopEndMeasure
     );
-    if (!start || !end) {
+    const startBeat = startRoute?.performanceStartBeat ?? start?.startBeat;
+    const endBeat = endRoute?.performanceEndBeat ?? end?.endBeat;
+    if (startBeat == null || endBeat == null) {
       return null;
     }
     return {
-      startBeat: start.startBeat,
-      endBeat: end.endBeat,
+      startBeat,
+      endBeat,
     };
   }
 
@@ -378,6 +389,11 @@ export class ScorePlayer {
   }
 
   private measureAtBeat(beat: number) {
+    for (const step of this.routeSpans) {
+      if (beat >= step.performanceStartBeat && beat < step.performanceEndBeat) {
+        return step.displayNumber;
+      }
+    }
     for (const measure of this.score.measures) {
       if (beat >= measure.startBeat && beat < measure.endBeat) {
         return measure.displayNumber;

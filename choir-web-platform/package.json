@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "validate:milestone1": "tsx scripts/milestone1_validate.ts"
+    "validate:milestone1": "tsx scripts/milestone1_validate.ts",
+    "test:score-structure": "tsx scripts/score-structure.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

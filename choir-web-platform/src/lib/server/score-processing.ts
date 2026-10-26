@@ -78,6 +78,10 @@ export async function processFileToParsedScore(
   (globalThis as { DOMParser: typeof window.DOMParser }).DOMParser = new JSDOM().window.DOMParser;
   try {
     const parsedScore = parseMusicXmlToScore(musicXml, sourceType);
+    if (parsedScore.structure) {
+      parsedScore.structure.sourceUploadType = uploadTypeFor(extension, input.pageNumbers);
+      warnings = [...new Set([...warnings, ...parsedScore.structure.recognitionWarnings])];
+    }
     return {
       musicXml,
       diagnostics,
@@ -94,6 +98,22 @@ export async function processFileToParsedScore(
       delete (globalThis as { DOMParser?: typeof window.DOMParser }).DOMParser;
     }
   }
+}
+
+function uploadTypeFor(extension: string, pageNumbers?: number[]) {
+  if ((pageNumbers?.length ?? 0) > 1) {
+    return "MULTI_IMAGE" as const;
+  }
+  if (extension === "pdf") {
+    return "PDF" as const;
+  }
+  if (extension === "xml" || extension === "musicxml") {
+    return "MUSICXML" as const;
+  }
+  if (["jpg", "png", "webp"].includes(extension)) {
+    return "IMAGE" as const;
+  }
+  return "UNKNOWN" as const;
 }
 
 export function extensionFor(fileName: string) {

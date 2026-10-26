@@ -51,6 +51,102 @@ export interface MeasureInfo {
   timeSignature: string;
 }
 
+export const UNIFIED_SCORE_PIPELINE_VERSION = "UNIFIED_SCORE_PIPELINE_V1";
+
+export type SourceUploadType = "PDF" | "IMAGE" | "MULTI_IMAGE" | "MUSICXML" | "UNKNOWN";
+
+export interface WrittenMeasure {
+  id: string;
+  displayNumber: number;
+  internalIndex: number;
+  timeSignature: string;
+  beatsInMeasure: number;
+  isPickup: boolean;
+  keySignature: string | null;
+}
+
+export interface KeySignatureRegion {
+  startMeasure: number;
+  endMeasure: number;
+  keySignature: string;
+  fifths: number;
+  source: "musicxml-key";
+}
+
+export interface KeyChangeTrace {
+  measureNumber: number;
+  oldKey: string | null;
+  newKey: string;
+  source: "musicxml-key";
+  confidence: "confirmed" | "rejected";
+  reason: string;
+}
+
+export interface TimeSignatureRegion {
+  startMeasure: number;
+  endMeasure: number;
+  timeSignature: string;
+}
+
+export interface ClefRegion {
+  partId: string;
+  staff: number;
+  startMeasure: number;
+  endMeasure: number;
+  sign: string;
+  line: number | null;
+}
+
+export type NavigationKind =
+  | "REPEAT_START"
+  | "REPEAT_END"
+  | "ENDING"
+  | "SEGNO"
+  | "CODA"
+  | "TO_CODA"
+  | "DA_CAPO"
+  | "DAL_SEGNO"
+  | "FINE";
+
+export interface NavigationEvent {
+  kind: NavigationKind;
+  measureNumber: number;
+  internalIndex: number;
+  endingNumbers: number[] | null;
+  text: string | null;
+}
+
+export interface PlaybackRouteStep {
+  writtenMeasureId: string;
+  displayNumber: number;
+  internalIndex: number;
+  visit: number;
+  performanceStartBeat: number;
+  performanceEndBeat: number;
+}
+
+export interface PartActivityRegion {
+  partId: string;
+  label: string;
+  canonicalPart: CanonicalPartId;
+  firstActiveMeasure: number | null;
+  lastActiveMeasure: number | null;
+}
+
+export interface ScoreStructure {
+  pipelineVersion: typeof UNIFIED_SCORE_PIPELINE_VERSION;
+  sourceUploadType: SourceUploadType;
+  writtenMeasures: WrittenMeasure[];
+  keySignatureRegions: KeySignatureRegion[];
+  keyChangeTrace: KeyChangeTrace[];
+  timeSignatureRegions: TimeSignatureRegion[];
+  clefRegions: ClefRegion[];
+  navigationEvents: NavigationEvent[];
+  playbackRoute: PlaybackRouteStep[];
+  partActivityRegions: PartActivityRegion[];
+  recognitionWarnings: string[];
+}
+
 export interface ParsedScore {
   title: string;
   sourceType: "musicxml" | "omr";
@@ -61,6 +157,10 @@ export interface ParsedScore {
   keySignature: string | null;
   rehearsalMarks: Record<string, number>;
   rawMusicXml: string;
+  /** Structural reading of the printed score. Playback must follow this route
+   * instead of inventing repeat copies. Absent on scores saved before the
+   * unified pipeline. */
+  structure?: ScoreStructure;
 }
 
 export interface OMRDiagnostics {

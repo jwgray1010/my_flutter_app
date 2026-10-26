@@ -5,6 +5,7 @@ import type {
   ParsedScore,
   RecognizedPart,
 } from "@/lib/score-types";
+import { buildScoreStructure } from "@/lib/score-structure";
 
 export function parseMusicXmlToScore(
   xmlText: string,
@@ -43,7 +44,6 @@ export function parseMusicXmlToScore(
   }
   const rehearsalMarks = readRehearsalMarks(partNodes[0]);
   const suggestedTempoBpm = readTempoHint(partNodes[0]) ?? 88;
-  const keySignature = readKeySignature(partNodes[0]);
   const notes: NoteEvent[] = [];
   const parts: RecognizedPart[] = [];
 
@@ -112,23 +112,35 @@ export function parseMusicXmlToScore(
     );
   });
 
-  autoResolveUnknownParts(parts, notes);
+  for (const part of parts) {
+    if (part.canonicalPart === "UNKNOWN") {
+      part.needsConfirmation = true;
+    }
+  }
   const canonicalByPartId = new Map(parts.map((part) => [part.id, part.canonicalPart]));
   for (const note of notes) {
     note.partCanonical = canonicalByPartId.get(note.partId) ?? note.partCanonical;
   }
   populatePartRanges(parts, notes);
+  const sortedNotes = notes.sort((a, b) => a.startBeat - b.startBeat);
+  const structure = buildScoreStructure({
+    partNodes,
+    measures: measureTemplate,
+    parts,
+    notes: sortedNotes,
+  });
 
   return {
     title: scoreTitle || "Untitled score",
     sourceType,
     parts,
-    notes: notes.sort((a, b) => a.startBeat - b.startBeat),
+    notes: sortedNotes,
     measures: measureTemplate,
     suggestedTempoBpm,
-    keySignature,
+    keySignature: structure.keySignatureRegions[0]?.keySignature ?? null,
     rehearsalMarks,
     rawMusicXml: xmlText,
+    structure,
   };
 }
 
@@ -447,47 +459,6 @@ function readTempoHint(partNode: Element) {
   return null;
 }
 
-function readKeySignature(partNode: Element) {
-  const measures = elementChildrenByTag(partNode, "measure");
-  for (const measure of measures) {
-    const fifthsNode = measure.querySelector("attributes > key > fifths");
-    if (!fifthsNode) {
-      continue;
-    }
-    const fifths = parseIntOr(textOf(fifthsNode), NaN);
-    if (!Number.isFinite(fifths)) {
-      continue;
-    }
-    return describeKeySignature(fifths);
-  }
-  return null;
-}
-
-function describeKeySignature(fifths: number) {
-  const majorKeys = [
-    "Cb",
-    "Gb",
-    "Db",
-    "Ab",
-    "Eb",
-    "Bb",
-    "F",
-    "C",
-    "G",
-    "D",
-    "A",
-    "E",
-    "B",
-    "F#",
-    "C#",
-  ];
-  const index = fifths + 7;
-  if (index >= 0 && index < majorKeys.length) {
-    return `${majorKeys[index]} major`;
-  }
-  return `${fifths} fifths`;
-}
-
 function estimatePartStaves(partNode: Element) {
   const firstMeasure = elementChildrenByTag(partNode, "measure")[0];
   const stavesText = textOf(firstMeasure?.querySelector("attributes > staves"));
@@ -516,61 +487,18 @@ function detectCanonicalPart(
     normalized.includes("piano") ||
     normalized.includes("accomp") ||
     normalized.includes("keyboard") ||
-    staves >= 2
+    normalized.includes("organ")
   ) {
     return { canonicalPart: "PIANO", confident: true };
   }
-  // No reliable name match (e.g. generic "Voice 1", "Voice 2"...). Leave
-  // unresolved here rather than guessing by position - autoResolveUnknownParts
-  // resolves every unnamed part together, by relative pitch, so a piece with
-  // more voices than the 4 standard SATB slots doesn't get a voice forced
-  // into a register it doesn't actually occupy.
+  if (staves >= 2) {
+    // A grand staff is accompaniment evidence, not a choir identity. Ask the
+    // director to confirm when the part is not labeled.
+    return { canonicalPart: "PIANO", confident: false };
+  }
+  // Unlabeled voices stay UNKNOWN. Pitch and staff count are not allowed to
+  // invent Soprano, Alto, Tenor, or Bass.
   return { canonicalPart: "UNKNOWN", confident: false };
-}
-
-/**
- * Resolves every unnamed ("UNKNOWN") part/voice by relative pitch, assigning
- * the highest-registered remaining voice to the highest-registered remaining
- * SATB slot, and so on down. Crucially, this only fills as many slots as are
- * actually still open: if a piece has more independent voices than SATB
- * roles (e.g. a condensed choral reduction with divisi, or several shared
- * staves), the extra voices are left UNKNOWN rather than being forced into a
- * register they don't belong in (e.g. never labels a tenor-range voice
- * "BASS" just because "BASS" happened to be the last free label).
- */
-function autoResolveUnknownParts(parts: RecognizedPart[], notes: NoteEvent[]) {
-  const assigned = new Set(
-    parts.filter((part) => part.canonicalPart !== "UNKNOWN").map((part) => part.canonicalPart)
-  );
-  const unknown = parts.filter((part) => part.canonicalPart === "UNKNOWN");
-  if (!unknown.length) {
-    return;
-  }
-
-  const midiByPart = new Map<string, number[]>();
-  for (const note of notes) {
-    if (!midiByPart.has(note.partId)) {
-      midiByPart.set(note.partId, []);
-    }
-    midiByPart.get(note.partId)?.push(note.midi);
-  }
-
-  const rankedUnknown = [...unknown].sort(
-    (a, b) => median(midiByPart.get(b.id) ?? []) - median(midiByPart.get(a.id) ?? [])
-  );
-
-  const satbOrder: CanonicalPartId[] = ["SOPRANO", "ALTO", "TENOR", "BASS"];
-  const remainingRoles = satbOrder.filter((role) => !assigned.has(role));
-
-  for (let i = 0; i < rankedUnknown.length && i < remainingRoles.length; i += 1) {
-    const role = remainingRoles[i];
-    rankedUnknown[i].canonicalPart = role;
-    rankedUnknown[i].needsConfirmation = true;
-    assigned.add(role);
-  }
-  // Any voices beyond the number of open SATB roles stay UNKNOWN - there is
-  // no musically-defensible automatic guess for them, so the director is
-  // asked via Identify Parts instead of receiving a wrong answer.
 }
 
 function pitchToMidi(step: string | null, octave: number, alter: number) {
@@ -614,11 +542,4 @@ function parseIntOr(value: string | null | undefined, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function median(values: number[]) {
-  if (!values.length) {
-    return 64;
-  }
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
-}
 
