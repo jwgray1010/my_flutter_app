@@ -5,6 +5,7 @@ import type {
   ParsedScore,
   RecognizedPart,
 } from "@/lib/score-types";
+import { isFeaturedName } from "@/lib/choir-voicing";
 import { buildScoreStructure } from "@/lib/score-structure";
 
 export function parseMusicXmlToScore(
@@ -59,11 +60,12 @@ export function parseMusicXmlToScore(
     if (!voiceGroups || voiceGroups.length <= 1) {
       // Single voice (or piano grand staff kept as one group): preserve the
       // simple, backward-compatible behavior of one RecognizedPart per part.
-      const detected = detectCanonicalPart(sourceName, staves);
+      const detected = classifyPart(sourceName, staves);
       const partMeta: RecognizedPart = {
         id: sourcePartId,
         sourceName,
         canonicalPart: detected.canonicalPart,
+        partRole: detected.partRole,
         staves,
         sourcePartId,
         voiceNumber: null,
@@ -83,6 +85,7 @@ export function parseMusicXmlToScore(
     // isolated during rehearsal, instead of treating the whole staff as one
     // undifferentiated part.
     const namedRoles = detectPairedVoiceNames(sourceName, voiceGroups.length);
+    const parentRole = classifyPart(sourceName, staves).partRole;
     const voiceParts = new Map<number, RecognizedPart>();
     voiceGroups.forEach((group, voiceIdx) => {
       const id = `${sourcePartId}:v${group.voiceNumber}`;
@@ -91,6 +94,7 @@ export function parseMusicXmlToScore(
         id,
         sourceName: `${sourceName} (voice ${group.voiceNumber})`,
         canonicalPart: roleFromName ?? "UNKNOWN",
+        partRole: parentRole === "FEATURED" ? "FEATURED" : "CHOIR",
         staves,
         sourcePartId,
         voiceNumber: group.voiceNumber,
@@ -466,39 +470,54 @@ function estimatePartStaves(partNode: Element) {
   return Math.max(1, staves);
 }
 
-function detectCanonicalPart(
-  sourceName: string,
-  staves: number
-): { canonicalPart: CanonicalPartId; confident: boolean } {
-  const normalized = sourceName.toLowerCase();
-  if (normalized.includes("soprano") || normalized === "s" || normalized === "sop.") {
-    return { canonicalPart: "SOPRANO", confident: true };
+function classifyPart(sourceName: string, staves: number): {
+  canonicalPart: CanonicalPartId;
+  confident: boolean;
+  partRole: "CHOIR" | "FEATURED" | "ACCOMPANIMENT";
+} {
+  const normalized = sourceName.toLowerCase().replace(/\./g, " ").replace(/\s+/g, " ").trim();
+  const voice = matchVoiceName(normalized);
+  if (isFeaturedName(sourceName)) {
+    return {
+      canonicalPart: voice ?? "UNKNOWN",
+      confident: voice != null,
+      partRole: "FEATURED",
+    };
   }
-  if (normalized.includes("alto") || normalized === "a" || normalized === "alto.") {
-    return { canonicalPart: "ALTO", confident: true };
+  if (/\b(piano|accompaniment|accomp|keyboard|organ|pno)\b/.test(normalized)) {
+    return { canonicalPart: "PIANO", confident: true, partRole: "ACCOMPANIMENT" };
   }
-  if (normalized.includes("tenor") || normalized === "t" || normalized === "ten.") {
-    return { canonicalPart: "TENOR", confident: true };
-  }
-  if (normalized.includes("bass") || normalized === "b" || normalized === "bs.") {
-    return { canonicalPart: "BASS", confident: true };
-  }
-  if (
-    normalized.includes("piano") ||
-    normalized.includes("accomp") ||
-    normalized.includes("keyboard") ||
-    normalized.includes("organ")
-  ) {
-    return { canonicalPart: "PIANO", confident: true };
+  if (voice) {
+    return { canonicalPart: voice, confident: true, partRole: "CHOIR" };
   }
   if (staves >= 2) {
     // A grand staff is accompaniment evidence, not a choir identity. Ask the
     // director to confirm when the part is not labeled.
-    return { canonicalPart: "PIANO", confident: false };
+    return { canonicalPart: "PIANO", confident: false, partRole: "ACCOMPANIMENT" };
   }
   // Unlabeled voices stay UNKNOWN. Pitch and staff count are not allowed to
   // invent Soprano, Alto, Tenor, or Bass.
-  return { canonicalPart: "UNKNOWN", confident: false };
+  return { canonicalPart: "UNKNOWN", confident: false, partRole: "CHOIR" };
+}
+
+function matchVoiceName(normalized: string): CanonicalPartId | null {
+  const tokens = new Set(normalized.split(" ").filter(Boolean));
+  if (normalized.includes("soprano") || tokens.has("sop") || tokens.has("s")) {
+    return "SOPRANO";
+  }
+  if (normalized.includes("alto") || tokens.has("a")) {
+    return "ALTO";
+  }
+  if (normalized.includes("tenor") || tokens.has("ten") || tokens.has("t")) {
+    return "TENOR";
+  }
+  if (normalized.includes("baritone") || tokens.has("bari") || tokens.has("bar")) {
+    return "BARITONE";
+  }
+  if (normalized.includes("bass") || tokens.has("bs") || tokens.has("b")) {
+    return "BASS";
+  }
+  return null;
 }
 
 function pitchToMidi(step: string | null, octave: number, alter: number) {

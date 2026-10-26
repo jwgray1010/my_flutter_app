@@ -2,9 +2,12 @@ export type CanonicalPartId =
   | "SOPRANO"
   | "ALTO"
   | "TENOR"
+  | "BARITONE"
   | "BASS"
   | "PIANO"
   | "UNKNOWN";
+
+export type PartRole = "CHOIR" | "FEATURED" | "ACCOMPANIMENT";
 
 export type AssignablePartId = CanonicalPartId | "IGNORE";
 
@@ -12,6 +15,9 @@ export interface RecognizedPart {
   id: string;
   sourceName: string;
   canonicalPart: CanonicalPartId;
+  /** Choir, featured solo/descant, or accompaniment. Missing on scores saved
+   * before this field existed; callers infer it from the part name. */
+  partRole?: PartRole;
   staves: number;
   /** The underlying MusicXML <part> id this voice was extracted from. */
   sourcePartId: string;

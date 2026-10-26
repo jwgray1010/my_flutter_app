@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { emptyManualCorrections, normalizeManualCorrections } from "@/lib/score-corrections";
+import { scoreTextureLabel } from "@/lib/choir-voicing";
 import type {
   AssignablePartId,
   CanonicalPartId,
@@ -379,7 +380,7 @@ export function getSavedScoreById(id: string): SavedScoreRecord | null {
     audiverisOmrPath: row.audiveris_omr_path,
     audiverisMxlPath: row.audiveris_mxl_path,
     audiverisMusicXmlPath: row.audiveris_musicxml_path,
-    partTextureLabel: buildPartTextureLabel(detectedParts),
+    partTextureLabel: scoreTextureLabel(parsedScore.parts),
     measureCount: parsedScore.measures.length,
     detectedParts,
     lastUsedTempoPercent: row.last_used_tempo_percent,
@@ -485,30 +486,12 @@ function toSummary(row: ScoreRow): SavedScoreSummary {
     title: row.title,
     importedAt: row.imported_at,
     sourceFileName: row.source_filename,
-    partTextureLabel: buildPartTextureLabel(detectedParts),
+    partTextureLabel: scoreTextureLabel(parsedScore.parts),
     measureCount: parsedScore.measures.length,
     detectedParts,
     lastUsedTempoPercent: row.last_used_tempo_percent,
     recognitionWarnings: safeParseJson<string[]>(row.recognition_warnings_json, []),
   };
-}
-
-function buildPartTextureLabel(parts: CanonicalPartId[]) {
-  const set = new Set(parts);
-  const hasSATB =
-    set.has("SOPRANO") && set.has("ALTO") && set.has("TENOR") && set.has("BASS");
-  const hasPiano = set.has("PIANO");
-  if (hasSATB && hasPiano) {
-    return "SATB + Piano";
-  }
-  if (hasSATB) {
-    return "SATB";
-  }
-  if (hasPiano) {
-    return "Piano";
-  }
-  const filtered = parts.filter((part) => part !== "UNKNOWN");
-  return filtered.length ? filtered.join(" + ") : "Unknown";
 }
 
 function safeParseJson<T>(raw: string | null | undefined, fallback: T): T {

@@ -22,6 +22,7 @@ export class ScorePlayer {
     "SOPRANO",
     "ALTO",
     "TENOR",
+    "BARITONE",
     "BASS",
     "PIANO",
   ]);
@@ -40,6 +41,11 @@ export class ScorePlayer {
     TENOR: new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "triangle" },
       envelope: { attack: 0.01, release: 0.25 },
+      volume: -8,
+    }).toDestination(),
+    BARITONE: new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.01, release: 0.3 },
       volume: -8,
     }).toDestination(),
     BASS: new Tone.PolySynth(Tone.Synth, {
