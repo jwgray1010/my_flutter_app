@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "validate:milestone1": "tsx scripts/milestone1_validate.ts"
+    "validate:milestone1": "tsx scripts/milestone1_validate.ts",
+    "test:score-recognition": "tsx scripts/score-recognition/run.ts --sets development,regression",
+    "test:score-regression": "tsx scripts/score-recognition/run.ts --sets regression",
+    "test:score-report": "tsx scripts/score-recognition/run.ts --sets development,regression,heldout --report"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

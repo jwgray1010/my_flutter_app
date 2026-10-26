@@ -170,6 +170,8 @@ function cloneScore(score: ParsedScore): ParsedScore {
     measures: score.measures.map((measure) => ({ ...measure })),
     notes: score.notes.map((note) => ({ ...note })),
     rehearsalMarks: { ...score.rehearsalMarks },
+    keyRegions: score.keyRegions?.map((region) => ({ ...region })),
+    performanceRoute: score.performanceRoute ? [...score.performanceRoute] : undefined,
   };
 }
 

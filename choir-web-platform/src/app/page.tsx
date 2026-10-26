@@ -1500,6 +1500,9 @@ function measureRangeLabel(score: ParsedScore) {
 }
 
 function choirFormatLabel(score: ParsedScore) {
+  if (score.inferredVoicing) {
+    return score.inferredVoicing;
+  }
   const vocalParts = new Set(
     score.parts
       .filter((part) => part.canonicalPart !== "PIANO" && part.canonicalPart !== "UNKNOWN")

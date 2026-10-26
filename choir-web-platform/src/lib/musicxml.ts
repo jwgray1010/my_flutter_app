@@ -1,10 +1,16 @@
 import type {
   CanonicalPartId,
+  KeyRegion,
   MeasureInfo,
   NoteEvent,
   ParsedScore,
   RecognizedPart,
 } from "@/lib/score-types";
+import { buildPerformanceRoute, type RepeatMeasure } from "@/lib/repeats";
+import { assignChoirRegisters, inferChoirVoicing } from "@/lib/voicing";
+
+const MAJOR_KEYS = ["Cb", "Gb", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E", "B", "F#", "C#"];
+const MINOR_KEYS = ["Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E", "B", "F#", "C#", "G#", "D#", "A#"];
 
 export function parseMusicXmlToScore(
   xmlText: string,
@@ -36,164 +42,479 @@ export function parseMusicXmlToScore(
     throw new Error("Invalid MusicXML: no parts found.");
   }
 
-  const measureTemplate = readMeasureTemplate(partNodes[0]);
-  const measureStartByNumber = new Map<number, number>();
-  for (const measure of measureTemplate) {
-    measureStartByNumber.set(measure.displayNumber, measure.startBeat);
-  }
+  const timeline = readPartTimeline(partNodes[0]);
   const rehearsalMarks = readRehearsalMarks(partNodes[0]);
   const suggestedTempoBpm = readTempoHint(partNodes[0]) ?? 88;
-  const keySignature = readKeySignature(partNodes[0]);
   const notes: NoteEvent[] = [];
   const parts: RecognizedPart[] = [];
 
   partNodes.forEach((partNode, idx) => {
     const sourcePartId = partNode.getAttribute("id") ?? `P${idx + 1}`;
     const sourceName = partNameById.get(sourcePartId) ?? `Part ${idx + 1}`;
+    const partTimeline = idx === 0 ? timeline : readPartTimeline(partNode);
     const staves = estimatePartStaves(partNode);
-    const isLikelyPiano =
-      staves >= 2 || /piano|accomp|keyboard|organ/i.test(sourceName);
-
-    const voiceGroups = isLikelyPiano ? null : detectSubstantiveVoices(partNode);
-
-    if (!voiceGroups || voiceGroups.length <= 1) {
-      // Single voice (or piano grand staff kept as one group): preserve the
-      // simple, backward-compatible behavior of one RecognizedPart per part.
-      const detected = detectCanonicalPart(sourceName, staves);
-      const partMeta: RecognizedPart = {
-        id: sourcePartId,
-        sourceName,
-        canonicalPart: detected.canonicalPart,
-        staves,
-        sourcePartId,
-        voiceNumber: null,
-        needsConfirmation: !detected.confident,
-        pitchRangeLow: null,
-        pitchRangeHigh: null,
-        firstMeasureNumber: null,
-        lastMeasureNumber: null,
-      };
-      parts.push(partMeta);
-      processPartNotes(partNode, () => partMeta, notes, measureStartByNumber);
-      return;
-    }
-
-    // Multiple substantive voices share this single staff (e.g. Soprano+Alto
-    // on one staff). Split into one RecognizedPart per voice so each can be
-    // isolated during rehearsal, instead of treating the whole staff as one
-    // undifferentiated part.
-    const namedRoles = detectPairedVoiceNames(sourceName, voiceGroups.length);
-    const voiceParts = new Map<number, RecognizedPart>();
-    voiceGroups.forEach((group, voiceIdx) => {
-      const id = `${sourcePartId}:v${group.voiceNumber}`;
-      const roleFromName = namedRoles?.[voiceIdx] ?? null;
-      voiceParts.set(group.voiceNumber, {
-        id,
-        sourceName: `${sourceName} (voice ${group.voiceNumber})`,
-        canonicalPart: roleFromName ?? "UNKNOWN",
-        staves,
-        sourcePartId,
-        voiceNumber: group.voiceNumber,
-        needsConfirmation: roleFromName == null,
-        pitchRangeLow: null,
-        pitchRangeHigh: null,
-        firstMeasureNumber: null,
-        lastMeasureNumber: null,
-      });
-    });
-    for (const partMeta of voiceParts.values()) {
-      parts.push(partMeta);
-    }
-    processPartNotes(
-      partNode,
-      (voiceNumber) => voiceParts.get(voiceNumber) ?? voiceParts.values().next().value ?? null,
+    const piano = partLooksLikePiano(sourceName, staves, readClefSigns(partNode));
+    appendPartNotes(partTimeline.notes, {
+      sourcePartId,
+      sourceName,
+      staves,
+      piano,
+      parts,
       notes,
-      measureStartByNumber
-    );
+    });
   });
 
-  autoResolveUnknownParts(parts, notes);
+  assignChoirRegisters(parts, notes);
   const canonicalByPartId = new Map(parts.map((part) => [part.id, part.canonicalPart]));
   for (const note of notes) {
     note.partCanonical = canonicalByPartId.get(note.partId) ?? note.partCanonical;
   }
   populatePartRanges(parts, notes);
 
+  const keyRegions = timeline.keyRegions;
   return {
     title: scoreTitle || "Untitled score",
     sourceType,
     parts,
-    notes: notes.sort((a, b) => a.startBeat - b.startBeat),
-    measures: measureTemplate,
+    notes: notes.sort((a, b) => a.startBeat - b.startBeat || a.midi - b.midi),
+    measures: timeline.measures,
     suggestedTempoBpm,
-    keySignature,
+    keySignature: keyRegions[0]?.label ?? null,
+    keyRegions,
+    inferredVoicing: inferChoirVoicing(parts),
+    performanceRoute: buildPerformanceRoute(timeline.repeats),
     rehearsalMarks,
     rawMusicXml: xmlText,
   };
 }
 
-interface VoiceGroup {
-  voiceNumber: number;
-  noteCount: number;
-  measureCount: number;
+interface RawNote {
+  voice: number;
+  staff: number;
+  midi: number;
+  startBeat: number;
+  durationBeats: number;
+  measureNumber: number;
+  tieStart: boolean;
+  tieStop: boolean;
 }
 
-/**
- * Finds voice numbers within a part that carry real, independent melodic
- * content (as opposed to a stray voice=2 used once for an engraving quirk).
- * Returns null/[] when the part should be treated as a single voice.
- */
-function detectSubstantiveVoices(partNode: Element): VoiceGroup[] | null {
-  const measures = elementChildrenByTag(partNode, "measure");
-  const stats = new Map<number, { noteCount: number; measures: Set<number> }>();
+interface PartTimeline {
+  measures: MeasureInfo[];
+  notes: RawNote[];
+  keyRegions: KeyRegion[];
+  repeats: RepeatMeasure[];
+}
 
-  measures.forEach((measure, idx) => {
-    const measureNumber = parseIntOr(measure.getAttribute("number"), idx + 1);
-    const noteNodes = elementChildrenByTag(measure, "note");
-    for (const noteNode of noteNodes) {
-      if (noteNode.querySelector("rest") != null) {
+function readPartTimeline(partNode: Element): PartTimeline {
+  const measureNodes = elementChildrenByTag(partNode, "measure");
+  const measures: MeasureInfo[] = [];
+  const notes: RawNote[] = [];
+  const keyRegions: KeyRegion[] = [];
+  const repeats: RepeatMeasure[] = [];
+  let divisions = 1;
+  let beats = 4;
+  let beatType = 4;
+  let absoluteBeat = 0;
+  const clefOctave = new Map<number, number>();
+  let activeFifths: number | null = null;
+  let activeMode: KeyRegion["mode"] | null = null;
+
+  measureNodes.forEach((measureNode, index) => {
+    const measureNumber = parseMeasureToken(measureNode.getAttribute("number"), index + 1);
+    const voiceEnd = new Map<number, number>();
+    let global = 0;
+    let currentVoice = 1;
+    let positioned = true;
+    let lastChordStart = 0;
+    const repeat: RepeatMeasure = {
+      number: measureNumber,
+      repeatForward: false,
+      repeatBackward: false,
+      repeatTimes: 2,
+      ending: null,
+    };
+
+    for (const child of Array.from(measureNode.children)) {
+      if (child.tagName === "attributes") {
+        const divisionsText = textOf(child.querySelector(":scope > divisions"));
+        if (divisionsText) {
+          divisions = Math.max(1, parseIntOr(divisionsText, divisions));
+        }
+        const beatsText = textOf(child.querySelector(":scope > time > beats"));
+        const beatTypeText = textOf(child.querySelector(":scope > time > beat-type"));
+        if (beatsText) {
+          beats = Math.max(1, parseIntOr(beatsText, beats));
+        }
+        if (beatTypeText) {
+          beatType = Math.max(1, parseIntOr(beatTypeText, beatType));
+        }
+        const fifthsText = textOf(child.querySelector(":scope > key > fifths"));
+        if (fifthsText) {
+          const fifths = parseIntOr(fifthsText, 0);
+          const modeText = (textOf(child.querySelector(":scope > key > mode")) ?? "major").toLowerCase();
+          const mode: KeyRegion["mode"] = modeText === "minor" ? "minor" : "major";
+          if (fifths !== activeFifths || mode !== activeMode) {
+            keyRegions.push({
+              startMeasure: measureNumber,
+              fifths,
+              mode,
+              label: describeKeySignature(fifths, mode),
+            });
+            activeFifths = fifths;
+            activeMode = mode;
+          }
+        }
+        for (const clef of Array.from(child.querySelectorAll(":scope > clef"))) {
+          const staff = parseIntOr(clef.getAttribute("number"), 1);
+          clefOctave.set(staff, parseIntOr(textOf(clef.querySelector("clef-octave-change")), 0));
+        }
         continue;
       }
-      if (noteNode.querySelector("pitch") == null) {
+      if (child.tagName === "barline") {
+        readBarline(child, repeat);
         continue;
       }
-      const voiceNumber = parseIntOr(textOf(noteNode.querySelector("voice")), 1);
-      if (!stats.has(voiceNumber)) {
-        stats.set(voiceNumber, { noteCount: 0, measures: new Set() });
+      if (child.tagName === "backup") {
+        global = Math.max(0, global - parseIntOr(textOf(child.querySelector("duration")), 0));
+        positioned = true;
+        continue;
       }
-      const entry = stats.get(voiceNumber);
-      if (entry) {
-        entry.noteCount += 1;
-        entry.measures.add(measureNumber);
+      if (child.tagName === "forward") {
+        global += parseIntOr(textOf(child.querySelector("duration")), 0);
+        positioned = true;
+        continue;
       }
+      if (child.tagName !== "note" || child.querySelector("grace") != null) {
+        continue;
+      }
+      const cue = child.querySelector("cue") != null || child.getAttribute("size") === "cue";
+      if (cue) {
+        continue;
+      }
+      const durationDivs = parseIntOr(textOf(child.querySelector("duration")), 0);
+      const voice = parseIntOr(textOf(child.querySelector("voice")), 1);
+      const staff = parseIntOr(textOf(child.querySelector("staff")), 1);
+      const chord = child.querySelector("chord") != null;
+      let startDivs = global;
+      if (!chord) {
+        if (!positioned && voice !== currentVoice && !voiceEnd.has(voice)) {
+          global = 0;
+        }
+        currentVoice = voice;
+        positioned = false;
+        startDivs = global;
+        lastChordStart = startDivs;
+        global += durationDivs;
+        voiceEnd.set(voice, global);
+      } else {
+        startDivs = lastChordStart;
+        voiceEnd.set(voice, Math.max(voiceEnd.get(voice) ?? 0, startDivs + durationDivs));
+      }
+      if (child.querySelector("rest") != null || durationDivs <= 0) {
+        continue;
+      }
+      const pitch = child.querySelector("pitch");
+      if (!pitch) {
+        continue;
+      }
+      const written = pitchToMidi(
+        textOf(pitch.querySelector("step")),
+        parseIntOr(textOf(pitch.querySelector("octave")), Number.NaN),
+        parseIntOr(textOf(pitch.querySelector("alter")), 0)
+      );
+      if (written == null) {
+        continue;
+      }
+      const ties = tieFlags(child);
+      notes.push({
+        voice,
+        staff,
+        midi: written + 12 * (clefOctave.get(staff) ?? 0),
+        startBeat: absoluteBeat + startDivs / divisions,
+        durationBeats: durationDivs / divisions,
+        measureNumber,
+        tieStart: ties.start,
+        tieStop: ties.stop,
+      });
+    }
+
+    const nominal = beats * (4 / beatType);
+    const content = voiceEnd.size ? Math.max(...voiceEnd.values()) / divisions : 0;
+    const length = content > 0 ? content : nominal;
+    measures.push({
+      displayNumber: measureNumber,
+      displayLabel: measureNode.getAttribute("number")?.trim() || String(measureNumber),
+      internalIndex: index,
+      startBeat: absoluteBeat,
+      endBeat: absoluteBeat + length,
+      beatsInMeasure: length,
+      timeSignature: `${beats}/${beatType}`,
+    });
+    repeats.push(repeat);
+    absoluteBeat += length;
+  });
+
+  return { measures, notes: mergeTiedNotes(notes), keyRegions, repeats };
+}
+
+function mergeTiedNotes(notes: RawNote[]): RawNote[] {
+  const open = new Map<string, RawNote>();
+  const merged: RawNote[] = [];
+  for (const note of notes) {
+    const key = `${note.voice}|${note.staff}|${note.midi}`;
+    const previous = open.get(key);
+    if (
+      note.tieStop &&
+      previous?.tieStart &&
+      Math.abs(previous.startBeat + previous.durationBeats - note.startBeat) < 0.02
+    ) {
+      previous.durationBeats += note.durationBeats;
+      previous.tieStart = note.tieStart;
+      if (!note.tieStart) {
+        open.delete(key);
+      }
+      continue;
+    }
+    const copy = { ...note };
+    merged.push(copy);
+    if (note.tieStart) {
+      open.set(key, copy);
+    } else {
+      open.delete(key);
+    }
+  }
+  return merged;
+}
+
+function tieFlags(note: Element): { start: boolean; stop: boolean } {
+  let start = false;
+  let stop = false;
+  for (const element of Array.from(note.querySelectorAll("tie, tied"))) {
+    const type = element.getAttribute("type");
+    if (type === "start") {
+      start = true;
+    }
+    if (type === "stop") {
+      stop = true;
+    }
+  }
+  return { start, stop };
+}
+
+function readBarline(barline: Element, repeat: RepeatMeasure) {
+  const repeatNode = barline.querySelector("repeat");
+  if (repeatNode) {
+    const direction = repeatNode.getAttribute("direction");
+    if (direction === "forward") {
+      repeat.repeatForward = true;
+    }
+    if (direction === "backward") {
+      repeat.repeatBackward = true;
+      repeat.repeatTimes = Math.max(2, parseIntOr(repeatNode.getAttribute("times"), 2));
+    }
+  }
+  const ending = barline.querySelector("ending");
+  if (ending && (ending.getAttribute("type") ?? "start") === "start") {
+    const number = parseIntOr(ending.getAttribute("number")?.split(",")[0], Number.NaN);
+    if (Number.isFinite(number)) {
+      repeat.ending = number;
+    }
+  }
+}
+
+function appendPartNotes(
+  rawNotes: RawNote[],
+  input: {
+    sourcePartId: string;
+    sourceName: string;
+    staves: number;
+    piano: boolean;
+    parts: RecognizedPart[];
+    notes: NoteEvent[];
+  }
+) {
+  if (input.piano || rawNotes.length === 0) {
+    const detected = input.piano
+      ? { canonicalPart: "PIANO" as const, confident: true, isSolo: false }
+      : detectCanonicalPart(input.sourceName);
+    const part = makePart({
+      id: input.sourcePartId,
+      sourceName: input.sourceName,
+      sourcePartId: input.sourcePartId,
+      canonicalPart: detected.canonicalPart,
+      confident: detected.confident,
+      isSolo: detected.isSolo,
+      staves: input.staves,
+      voiceNumber: null,
+    });
+    input.parts.push(part);
+    for (const note of rawNotes) {
+      input.notes.push(toNoteEvent(note, part));
+    }
+    return;
+  }
+
+  const splitByStaff = input.staves > 1;
+  const grouped = new Map<string, RawNote[]>();
+  for (const note of rawNotes) {
+    const staff = splitByStaff ? note.staff : 0;
+    const key = `${staff}:${note.voice}`;
+    const list = grouped.get(key) ?? [];
+    list.push(note);
+    grouped.set(key, list);
+  }
+  const streams = [...grouped.entries()]
+    .map(([key, streamNotes]) => {
+      const [staffText, voiceText] = key.split(":");
+      const measures = new Set(streamNotes.map((note) => note.measureNumber));
+      return {
+        staff: Number(staffText),
+        voice: Number(voiceText),
+        notes: streamNotes,
+        measureCount: measures.size,
+      };
+    })
+    .sort((a, b) => a.staff - b.staff || a.voice - b.voice);
+  const substantive = streams.filter((stream) => stream.notes.length >= 6 && stream.measureCount >= 3);
+  if (substantive.length < 2) {
+    const detected = detectCanonicalPart(input.sourceName);
+    const part = makePart({
+      id: input.sourcePartId,
+      sourceName: input.sourceName,
+      sourcePartId: input.sourcePartId,
+      canonicalPart: detected.canonicalPart,
+      confident: detected.confident,
+      isSolo: detected.isSolo,
+      staves: input.staves,
+      voiceNumber: null,
+    });
+    input.parts.push(part);
+    for (const note of rawNotes) {
+      input.notes.push(toNoteEvent(note, part));
+    }
+    return;
+  }
+  const selected = substantive;
+  const multiple = true;
+  const namedRoles = multiple && !splitByStaff ? detectPairedVoiceNames(input.sourceName, selected.length) : null;
+
+  selected.forEach((stream, index) => {
+    const detected = namedRoles?.[index]
+      ? { canonicalPart: namedRoles[index] as CanonicalPartId, confident: true, isSolo: false }
+      : multiple
+        ? { canonicalPart: "UNKNOWN" as const, confident: false, isSolo: false }
+        : detectCanonicalPart(input.sourceName);
+    const id = !multiple
+      ? input.sourcePartId
+      : splitByStaff
+        ? `${input.sourcePartId}:s${stream.staff}:v${stream.voice}`
+        : `${input.sourcePartId}:v${stream.voice}`;
+    const label = !multiple
+      ? input.sourceName
+      : splitByStaff
+        ? `${input.sourceName} (staff ${stream.staff} voice ${stream.voice})`
+        : `${input.sourceName} (voice ${stream.voice})`;
+    const part = makePart({
+      id,
+      sourceName: label,
+      sourcePartId: input.sourcePartId,
+      canonicalPart: detected.canonicalPart,
+      confident: detected.confident,
+      isSolo: detected.isSolo || /\b(solo|descant)\b/i.test(input.sourceName),
+      staves: input.staves,
+      voiceNumber: multiple ? stream.voice : null,
+    });
+    input.parts.push(part);
+    for (const note of stream.notes) {
+      input.notes.push(toNoteEvent(note, part));
     }
   });
 
-  // A real independent choral voice sustains itself across a meaningful
-  // stretch of the piece. A handful of scattered notes spread thinly across
-  // many measures is much more often an Audiveris misread (a stray voice
-  // number applied to a couple of noteheads) than a genuine extra part, so
-  // the bar is set higher than "more than a couple of notes".
-  const MIN_NOTES = 6;
-  const MIN_MEASURES = 3;
-  const groups: VoiceGroup[] = Array.from(stats.entries())
-    .map(([voiceNumber, entry]) => ({
-      voiceNumber,
-      noteCount: entry.noteCount,
-      measureCount: entry.measures.size,
-    }))
-    .filter((group) => group.noteCount >= MIN_NOTES && group.measureCount >= MIN_MEASURES)
-    .sort((a, b) => a.voiceNumber - b.voiceNumber);
+  if (substantive.length >= 2) {
+    const stray = streams.filter((stream) => !selected.includes(stream));
+    for (const stream of stray) {
+      const host =
+        selected.find((candidate) => candidate.staff === stream.staff) ?? selected[0];
+      const hostPart = input.parts.find((part) =>
+        splitByStaff
+          ? part.id === `${input.sourcePartId}:s${host.staff}:v${host.voice}`
+          : part.id === `${input.sourcePartId}:v${host.voice}`
+      );
+      if (!hostPart) {
+        continue;
+      }
+      for (const note of stream.notes) {
+        input.notes.push(toNoteEvent(note, hostPart));
+      }
+    }
+  }
+}
 
-  return groups.length >= 2 ? groups : null;
+function makePart(input: {
+  id: string;
+  sourceName: string;
+  sourcePartId: string;
+  canonicalPart: CanonicalPartId;
+  confident: boolean;
+  isSolo: boolean;
+  staves: number;
+  voiceNumber: number | null;
+}): RecognizedPart {
+  return {
+    id: input.id,
+    sourceName: input.sourceName,
+    canonicalPart: input.canonicalPart,
+    staves: input.staves,
+    sourcePartId: input.sourcePartId,
+    voiceNumber: input.voiceNumber,
+    needsConfirmation: !input.confident,
+    isSolo: input.isSolo,
+    pitchRangeLow: null,
+    pitchRangeHigh: null,
+    firstMeasureNumber: null,
+    lastMeasureNumber: null,
+  };
+}
+
+function toNoteEvent(note: RawNote, part: RecognizedPart): NoteEvent {
+  return {
+    partId: part.id,
+    partCanonical: part.canonicalPart,
+    midi: note.midi,
+    startBeat: note.startBeat,
+    durationBeats: note.durationBeats,
+    measureNumber: note.measureNumber,
+    velocity: part.canonicalPart === "PIANO" ? 0.72 : 0.82,
+  };
+}
+
+function partLooksLikePiano(sourceName: string, staves: number, clefSigns: string[]): boolean {
+  const normalized = sourceName.toLowerCase();
+  if (/piano|accomp|keyboard|organ/.test(normalized)) {
+    return true;
+  }
+  if (/soprano|alto|tenor|bass|choir|voice|solo|descant|baritone|canto|altus|bassus/.test(normalized)) {
+    return false;
+  }
+  return staves >= 2 && clefSigns.includes("G") && clefSigns.includes("F");
+}
+
+function readClefSigns(partNode: Element): string[] {
+  const signs: string[] = [];
+  for (const clef of Array.from(partNode.querySelectorAll("clef"))) {
+    const sign = textOf(clef.querySelector("sign"));
+    if (sign) {
+      signs.push(sign.toUpperCase());
+    }
+  }
+  return signs;
 }
 
 /**
  * If a shared-staff part is explicitly labeled with two role names
  * (e.g. "Soprano/Alto", "S/A", "Tenor Bass", "T. B."), map each detected
- * voice (in ascending voice-number order, which by MusicXML/engraving
- * convention places the higher voice first) to its named role.
- * Returns null when the name doesn't clearly identify multiple roles.
+ * voice (in ascending voice-number order) to its named role.
  */
 function detectPairedVoiceNames(sourceName: string, voiceCount: number): (CanonicalPartId | null)[] | null {
   const normalized = sourceName.toLowerCase().replace(/[.\s]+/g, " ").trim();
@@ -240,165 +561,6 @@ export function populatePartRanges(parts: RecognizedPart[], notes: NoteEvent[]) 
   }
 }
 
-function processPartNotes(
-  partNode: Element,
-  resolvePartForVoice: (voiceNumber: number) => RecognizedPart | null,
-  notes: NoteEvent[],
-  measureStartByNumber: Map<number, number>
-) {
-  let divisions = 1;
-  const measures = elementChildrenByTag(partNode, "measure");
-  for (let idx = 0; idx < measures.length; idx += 1) {
-    const measure = measures[idx];
-    const measureNumber = parseIntOr(
-      measure.getAttribute("number"),
-      idx + 1
-    );
-    const attrs = measure.querySelector("attributes");
-    if (attrs) {
-      const maybeDivs = parseIntOr(textOf(attrs.querySelector("divisions")), divisions);
-      divisions = Math.max(1, maybeDivs);
-    }
-    let cursorDivs = 0;
-    let lastChordStartDivs = 0;
-    const children = Array.from(measure.children);
-    for (const child of children) {
-      if (child.tagName === "backup") {
-        const duration = parseIntOr(textOf(child.querySelector("duration")), 0);
-        cursorDivs = Math.max(0, cursorDivs - duration);
-        continue;
-      }
-      if (child.tagName === "forward") {
-        const duration = parseIntOr(textOf(child.querySelector("duration")), 0);
-        cursorDivs += duration;
-        continue;
-      }
-      if (child.tagName !== "note") {
-        continue;
-      }
-      const durationDivs = parseIntOr(textOf(child.querySelector("duration")), 0);
-      const isChord = child.querySelector("chord") != null;
-      const isRest = child.querySelector("rest") != null;
-      const startDivs = isChord ? lastChordStartDivs : cursorDivs;
-      if (!isChord) {
-        lastChordStartDivs = startDivs;
-        cursorDivs += durationDivs;
-      }
-      if (isRest || durationDivs <= 0) {
-        continue;
-      }
-      const pitch = child.querySelector("pitch");
-      if (!pitch) {
-        continue;
-      }
-      const midi = pitchToMidi(
-        textOf(pitch.querySelector("step")),
-        parseIntOr(textOf(pitch.querySelector("octave")), Number.NaN),
-        parseIntOr(textOf(pitch.querySelector("alter")), 0)
-      );
-      if (midi == null) {
-        continue;
-      }
-      const voiceNumber = parseIntOr(textOf(child.querySelector("voice")), 1);
-      const partMeta = resolvePartForVoice(voiceNumber);
-      if (!partMeta) {
-        continue;
-      }
-      const measureStart = measureStartByNumber.get(measureNumber) ?? (measureNumber - 1) * 4;
-      notes.push({
-        partId: partMeta.id,
-        partCanonical: partMeta.canonicalPart,
-        midi,
-        startBeat: measureStart + startDivs / divisions,
-        durationBeats: durationDivs / divisions,
-        measureNumber,
-        velocity: partMeta.canonicalPart === "PIANO" ? 0.72 : 0.82,
-      });
-    }
-  }
-}
-
-function readMeasureTemplate(partNode: Element): MeasureInfo[] {
-  const measures = elementChildrenByTag(partNode, "measure");
-  const template: MeasureInfo[] = [];
-  let currentBeats = 4;
-  let currentBeatType = 4;
-  let currentDivisions = 1;
-  let cursorBeats = 0;
-
-  measures.forEach((measureNode, idx) => {
-    const time = measureNode.querySelector("attributes > time");
-    const beats = parseIntOr(textOf(time?.querySelector("beats")), currentBeats);
-    const beatType = parseIntOr(textOf(time?.querySelector("beat-type")), currentBeatType);
-    currentBeats = Math.max(1, beats);
-    currentBeatType = Math.max(1, beatType);
-
-    const divisions = parseIntOr(
-      textOf(measureNode.querySelector("attributes > divisions")),
-      currentDivisions
-    );
-    currentDivisions = Math.max(1, divisions);
-
-    const measureDurationBeats = inferMeasureDurationBeats(
-      measureNode,
-      currentBeats,
-      currentBeatType,
-      currentDivisions
-    );
-    const displayNumber = parseIntOr(measureNode.getAttribute("number"), idx + 1);
-    template.push({
-      displayNumber,
-      internalIndex: idx,
-      startBeat: cursorBeats,
-      endBeat: cursorBeats + measureDurationBeats,
-      beatsInMeasure: measureDurationBeats,
-      timeSignature: `${currentBeats}/${currentBeatType}`,
-    });
-    cursorBeats += measureDurationBeats;
-  });
-
-  return template;
-}
-
-function inferMeasureDurationBeats(
-  measureNode: Element,
-  beats: number,
-  beatType: number,
-  divisions: number
-) {
-  let maxCursor = 0;
-  let cursor = 0;
-  const children = Array.from(measureNode.children);
-  for (const child of children) {
-    if (child.tagName === "backup") {
-      const duration = parseIntOr(textOf(child.querySelector("duration")), 0);
-      cursor = Math.max(0, cursor - duration);
-      continue;
-    }
-    if (child.tagName === "forward") {
-      const duration = parseIntOr(textOf(child.querySelector("duration")), 0);
-      cursor += duration;
-      maxCursor = Math.max(maxCursor, cursor);
-      continue;
-    }
-    if (child.tagName !== "note") {
-      continue;
-    }
-    const duration = parseIntOr(textOf(child.querySelector("duration")), 0);
-    if (child.querySelector("chord") == null) {
-      cursor += duration;
-      maxCursor = Math.max(maxCursor, cursor);
-    } else {
-      maxCursor = Math.max(maxCursor, cursor);
-    }
-  }
-
-  if (maxCursor > 0) {
-    return maxCursor / divisions;
-  }
-  return beats * (4 / beatType);
-}
-
 function readTitle(root: Element) {
   const credits = elementChildrenByTag(root, "credit");
   for (const credit of credits) {
@@ -415,17 +577,13 @@ function readRehearsalMarks(partNode: Element) {
   const measures = elementChildrenByTag(partNode, "measure");
   for (const measure of measures) {
     const directions = elementChildrenByTag(measure, "direction");
-    const measureNumber = parseIntOr(measure.getAttribute("number"), NaN);
+    const measureNumber = parseMeasureToken(measure.getAttribute("number"), Number.NaN);
     for (const direction of directions) {
       const rehearsal = textOf(direction.querySelector("direction-type > rehearsal"));
-      if (!rehearsal) {
+      if (!rehearsal || !Number.isFinite(measureNumber)) {
         continue;
       }
-      const label = rehearsal.toUpperCase();
-      if (!label || !Number.isFinite(measureNumber)) {
-        continue;
-      }
-      marks[label] = measureNumber;
+      marks[rehearsal.toUpperCase()] = measureNumber;
     }
   }
   return marks;
@@ -436,9 +594,7 @@ function readTempoHint(partNode: Element) {
   for (const measure of measures) {
     const directions = elementChildrenByTag(measure, "direction");
     for (const direction of directions) {
-      const sound = direction.querySelector("sound");
-      const tempoAttr = sound?.getAttribute("tempo");
-      const tempo = parseIntOr(tempoAttr, NaN);
+      const tempo = parseIntOr(direction.querySelector("sound")?.getAttribute("tempo"), Number.NaN);
       if (Number.isFinite(tempo) && tempo > 20 && tempo < 250) {
         return tempo;
       }
@@ -447,130 +603,44 @@ function readTempoHint(partNode: Element) {
   return null;
 }
 
-function readKeySignature(partNode: Element) {
-  const measures = elementChildrenByTag(partNode, "measure");
-  for (const measure of measures) {
-    const fifthsNode = measure.querySelector("attributes > key > fifths");
-    if (!fifthsNode) {
-      continue;
-    }
-    const fifths = parseIntOr(textOf(fifthsNode), NaN);
-    if (!Number.isFinite(fifths)) {
-      continue;
-    }
-    return describeKeySignature(fifths);
-  }
-  return null;
-}
-
-function describeKeySignature(fifths: number) {
-  const majorKeys = [
-    "Cb",
-    "Gb",
-    "Db",
-    "Ab",
-    "Eb",
-    "Bb",
-    "F",
-    "C",
-    "G",
-    "D",
-    "A",
-    "E",
-    "B",
-    "F#",
-    "C#",
-  ];
+function describeKeySignature(fifths: number, mode: "major" | "minor") {
+  const table = mode === "minor" ? MINOR_KEYS : MAJOR_KEYS;
   const index = fifths + 7;
-  if (index >= 0 && index < majorKeys.length) {
-    return `${majorKeys[index]} major`;
+  if (index >= 0 && index < table.length) {
+    return `${table[index]} ${mode}`;
   }
   return `${fifths} fifths`;
 }
 
 function estimatePartStaves(partNode: Element) {
   const firstMeasure = elementChildrenByTag(partNode, "measure")[0];
-  const stavesText = textOf(firstMeasure?.querySelector("attributes > staves"));
-  const staves = parseIntOr(stavesText, 1);
+  const staves = parseIntOr(textOf(firstMeasure?.querySelector("attributes > staves")), 1);
   return Math.max(1, staves);
 }
 
-function detectCanonicalPart(
-  sourceName: string,
-  staves: number
-): { canonicalPart: CanonicalPartId; confident: boolean } {
+function detectCanonicalPart(sourceName: string): {
+  canonicalPart: CanonicalPartId;
+  confident: boolean;
+  isSolo: boolean;
+} {
   const normalized = sourceName.toLowerCase();
+  const isSolo = /\b(solo|descant)\b/.test(normalized);
   if (normalized.includes("soprano") || normalized === "s" || normalized === "sop.") {
-    return { canonicalPart: "SOPRANO", confident: true };
+    return { canonicalPart: "SOPRANO", confident: true, isSolo };
   }
   if (normalized.includes("alto") || normalized === "a" || normalized === "alto.") {
-    return { canonicalPart: "ALTO", confident: true };
+    return { canonicalPart: "ALTO", confident: true, isSolo };
   }
   if (normalized.includes("tenor") || normalized === "t" || normalized === "ten.") {
-    return { canonicalPart: "TENOR", confident: true };
+    return { canonicalPart: "TENOR", confident: true, isSolo };
   }
   if (normalized.includes("bass") || normalized === "b" || normalized === "bs.") {
-    return { canonicalPart: "BASS", confident: true };
+    return { canonicalPart: "BASS", confident: true, isSolo };
   }
-  if (
-    normalized.includes("piano") ||
-    normalized.includes("accomp") ||
-    normalized.includes("keyboard") ||
-    staves >= 2
-  ) {
-    return { canonicalPart: "PIANO", confident: true };
+  if (normalized.includes("piano") || normalized.includes("accomp") || normalized.includes("keyboard")) {
+    return { canonicalPart: "PIANO", confident: true, isSolo: false };
   }
-  // No reliable name match (e.g. generic "Voice 1", "Voice 2"...). Leave
-  // unresolved here rather than guessing by position - autoResolveUnknownParts
-  // resolves every unnamed part together, by relative pitch, so a piece with
-  // more voices than the 4 standard SATB slots doesn't get a voice forced
-  // into a register it doesn't actually occupy.
-  return { canonicalPart: "UNKNOWN", confident: false };
-}
-
-/**
- * Resolves every unnamed ("UNKNOWN") part/voice by relative pitch, assigning
- * the highest-registered remaining voice to the highest-registered remaining
- * SATB slot, and so on down. Crucially, this only fills as many slots as are
- * actually still open: if a piece has more independent voices than SATB
- * roles (e.g. a condensed choral reduction with divisi, or several shared
- * staves), the extra voices are left UNKNOWN rather than being forced into a
- * register they don't belong in (e.g. never labels a tenor-range voice
- * "BASS" just because "BASS" happened to be the last free label).
- */
-function autoResolveUnknownParts(parts: RecognizedPart[], notes: NoteEvent[]) {
-  const assigned = new Set(
-    parts.filter((part) => part.canonicalPart !== "UNKNOWN").map((part) => part.canonicalPart)
-  );
-  const unknown = parts.filter((part) => part.canonicalPart === "UNKNOWN");
-  if (!unknown.length) {
-    return;
-  }
-
-  const midiByPart = new Map<string, number[]>();
-  for (const note of notes) {
-    if (!midiByPart.has(note.partId)) {
-      midiByPart.set(note.partId, []);
-    }
-    midiByPart.get(note.partId)?.push(note.midi);
-  }
-
-  const rankedUnknown = [...unknown].sort(
-    (a, b) => median(midiByPart.get(b.id) ?? []) - median(midiByPart.get(a.id) ?? [])
-  );
-
-  const satbOrder: CanonicalPartId[] = ["SOPRANO", "ALTO", "TENOR", "BASS"];
-  const remainingRoles = satbOrder.filter((role) => !assigned.has(role));
-
-  for (let i = 0; i < rankedUnknown.length && i < remainingRoles.length; i += 1) {
-    const role = remainingRoles[i];
-    rankedUnknown[i].canonicalPart = role;
-    rankedUnknown[i].needsConfirmation = true;
-    assigned.add(role);
-  }
-  // Any voices beyond the number of open SATB roles stay UNKNOWN - there is
-  // no musically-defensible automatic guess for them, so the director is
-  // asked via Identify Parts instead of receiving a wrong answer.
+  return { canonicalPart: "UNKNOWN", confident: false, isSolo };
 }
 
 function pitchToMidi(step: string | null, octave: number, alter: number) {
@@ -578,15 +648,7 @@ function pitchToMidi(step: string | null, octave: number, alter: number) {
   if (!normalizedStep || !Number.isFinite(octave)) {
     return null;
   }
-  const stepOffset: Record<string, number> = {
-    C: 0,
-    D: 2,
-    E: 4,
-    F: 5,
-    G: 7,
-    A: 9,
-    B: 11,
-  };
+  const stepOffset: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
   const base = stepOffset[normalizedStep];
   if (base == null) {
     return null;
@@ -614,11 +676,13 @@ function parseIntOr(value: string | null | undefined, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function median(values: number[]) {
-  if (!values.length) {
-    return 64;
+function parseMeasureToken(value: string | null | undefined, fallback: number) {
+  if (value == null || value.trim() === "") {
+    return fallback;
   }
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
+  const match = /^(\d+)/.exec(value.trim());
+  if (!match) {
+    return fallback;
+  }
+  return Number(match[1]);
 }
-

@@ -1,0 +1,559 @@
+{
+  "selected": 28,
+  "verified": 28,
+  "blocked": [],
+  "passed": 10,
+  "failed": 18,
+  "bySet": {
+    "development": {
+      "passed": 2,
+      "failed": 16,
+      "blocked": 0
+    },
+    "regression": {
+      "passed": 8,
+      "failed": 2,
+      "blocked": 0
+    }
+  },
+  "categories": {
+    "voicing": {
+      "passed": 18,
+      "scored": 28
+    },
+    "accompaniment": {
+      "passed": 27,
+      "scored": 28
+    },
+    "logical-parts": {
+      "passed": 27,
+      "scored": 28
+    },
+    "entrance": {
+      "passed": 26,
+      "scored": 28
+    },
+    "measures": {
+      "passed": 26,
+      "scored": 28
+    },
+    "time-signature": {
+      "passed": 28,
+      "scored": 28
+    },
+    "key": {
+      "passed": 25,
+      "scored": 28
+    },
+    "pitch": {
+      "passed": 24,
+      "scored": 28
+    },
+    "duration": {
+      "passed": 25,
+      "scored": 28
+    },
+    "solo": {
+      "passed": 28,
+      "scored": 28
+    },
+    "playback-channels": {
+      "passed": 28,
+      "scored": 28
+    },
+    "performance-route": {
+      "passed": 24,
+      "scored": 28
+    }
+  },
+  "pitchMatched": 2147,
+  "pitchExpected": 2338,
+  "unknownNotes": 0,
+  "noteCount": 2373,
+  "scheduleMs": 17.33545400000071,
+  "scheduleChecks": 28,
+  "heapBefore": 50185088,
+  "heapAfter": 149513456,
+  "failures": [
+    {
+      "id": "dev-ssa-unnamed",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "SSA",
+          "actual": "SAT",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        }
+      ],
+      "pitchMatched": 96,
+      "pitchExpected": 96,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 96,
+      "set": "development",
+      "title": "Unnamed SSA",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-ssaa-unnamed",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "SSAA",
+          "actual": "SATB",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        }
+      ],
+      "pitchMatched": 128,
+      "pitchExpected": 128,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 128,
+      "set": "development",
+      "title": "Unnamed SSAA",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-ttbb-unnamed",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "TTBB",
+          "actual": "SATB",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        }
+      ],
+      "pitchMatched": 128,
+      "pitchExpected": 128,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 128,
+      "set": "development",
+      "title": "Unnamed TTBB",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-sab-unnamed",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "SAB",
+          "actual": "SAT",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        }
+      ],
+      "pitchMatched": 96,
+      "pitchExpected": 96,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 96,
+      "set": "development",
+      "title": "Unnamed SAB",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-tenor-octave",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "Unison",
+          "actual": "T",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        },
+        {
+          "category": "pitch",
+          "expected": "32 events",
+          "actual": "matched 0, missing 0, extra 0, pitch 32, duration 0. P1 beat 0 midi 55 vs 67",
+          "probableCause": "Written pitch was not transposed for the clef, or voice timing shifted.",
+          "responsibleFunction": "pitchToMidi / readPartTimeline"
+        }
+      ],
+      "pitchMatched": 0,
+      "pitchExpected": 32,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 32,
+      "set": "development",
+      "title": "Tenor octave-transposing clef",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-a-minor",
+      "passed": false,
+      "failures": [
+        {
+          "category": "key",
+          "expected": "1:A minor",
+          "actual": "1:C major",
+          "probableCause": "Only the first signature was kept, or minor mode was ignored.",
+          "responsibleFunction": "readKeyRegions"
+        }
+      ],
+      "pitchMatched": 128,
+      "pitchExpected": 128,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 128,
+      "set": "development",
+      "title": "A minor signature",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-key-change",
+      "passed": false,
+      "failures": [
+        {
+          "category": "key",
+          "expected": "1:C major, 5:G major",
+          "actual": "1:C major",
+          "probableCause": "Only the first signature was kept, or minor mode was ignored.",
+          "responsibleFunction": "readKeyRegions"
+        }
+      ],
+      "pitchMatched": 128,
+      "pitchExpected": 128,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 128,
+      "set": "development",
+      "title": "C major to G major",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-missing-backup",
+      "passed": false,
+      "failures": [
+        {
+          "category": "measures",
+          "expected": "4,4,4,4,4,4,4,4",
+          "actual": "m1 expected 4 actual 8; m2 expected 4 actual 8; m3 expected 4 actual 8; m4 expected 4 actual 8",
+          "probableCause": "Measure length followed a summed multi-voice cursor or ignored a pickup.",
+          "responsibleFunction": "readPartTimeline"
+        },
+        {
+          "category": "pitch",
+          "expected": "64 events",
+          "actual": "matched 32, missing 32, extra 32, pitch 0, duration 0. missing P1:v1 beat 4 midi 74",
+          "probableCause": "Written pitch was not transposed for the clef, or voice timing shifted.",
+          "responsibleFunction": "pitchToMidi / readPartTimeline"
+        }
+      ],
+      "pitchMatched": 32,
+      "pitchExpected": 64,
+      "pitchExtra": 32,
+      "playbackUnknownNotes": 0,
+      "noteCount": 64,
+      "set": "development",
+      "title": "Shared staff without backup",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-ties",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "Unison",
+          "actual": "S",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        },
+        {
+          "category": "duration",
+          "expected": "16 events",
+          "actual": "matched 0, missing 0, extra 16, pitch 0, duration 16. P1 beat 0 duration 2 vs 1",
+          "probableCause": "Tied notes were stored as separate short events.",
+          "responsibleFunction": "mergeTiedNotes"
+        }
+      ],
+      "pitchMatched": 0,
+      "pitchExpected": 16,
+      "pitchExtra": 16,
+      "playbackUnknownNotes": 0,
+      "noteCount": 32,
+      "set": "development",
+      "title": "Tied quarters sound as halves",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-cue-entrance",
+      "passed": false,
+      "failures": [
+        {
+          "category": "measures",
+          "expected": "4,4,4,4,4,4,4,4",
+          "actual": "m1 expected 4 actual 8; m2 expected 4 actual 8; m3 expected 4 actual 8; m4 expected 4 actual 8",
+          "probableCause": "Measure length followed a summed multi-voice cursor or ignored a pickup.",
+          "responsibleFunction": "readPartTimeline"
+        },
+        {
+          "category": "entrance",
+          "expected": "P1 measure 5",
+          "actual": "P1 measure 1",
+          "probableCause": "Rests, cues, or a shifted voice cursor moved the first sounding note.",
+          "responsibleFunction": "readPartTimeline / populatePartRanges"
+        },
+        {
+          "category": "pitch",
+          "expected": "48 events",
+          "actual": "matched 16, missing 24, extra 40, pitch 8, duration 0. P1 beat 16 midi 72 vs 60",
+          "probableCause": "Written pitch was not transposed for the clef, or voice timing shifted.",
+          "responsibleFunction": "pitchToMidi / readPartTimeline"
+        }
+      ],
+      "pitchMatched": 16,
+      "pitchExpected": 48,
+      "pitchExtra": 40,
+      "playbackUnknownNotes": 0,
+      "noteCount": 64,
+      "set": "development",
+      "title": "Cue notes before a real entrance",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-choir-two-staves",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "SA",
+          "actual": "Piano",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        },
+        {
+          "category": "accompaniment",
+          "expected": "no piano",
+          "actual": "piano present",
+          "probableCause": "A multi-staff part was classified from staff count instead of clefs and name.",
+          "responsibleFunction": "partLooksLikePiano"
+        },
+        {
+          "category": "logical-parts",
+          "expected": "2",
+          "actual": "0",
+          "probableCause": "Shared staves were collapsed, or a vocal staff was treated as piano.",
+          "responsibleFunction": "detectStreams / partLooksLikePiano"
+        },
+        {
+          "category": "entrance",
+          "expected": "P1:s1:v1 measure 1",
+          "actual": "P1:s1:v1 missing",
+          "probableCause": "Rests, cues, or a shifted voice cursor moved the first sounding note.",
+          "responsibleFunction": "readPartTimeline / populatePartRanges"
+        },
+        {
+          "category": "entrance",
+          "expected": "P1:s2:v1 measure 1",
+          "actual": "P1:s2:v1 missing",
+          "probableCause": "Rests, cues, or a shifted voice cursor moved the first sounding note.",
+          "responsibleFunction": "readPartTimeline / populatePartRanges"
+        },
+        {
+          "category": "pitch",
+          "expected": "64 events",
+          "actual": "matched 0, missing 64, extra 64, pitch 0, duration 0. missing P1:s1:v1 beat 0 midi 74",
+          "probableCause": "Written pitch was not transposed for the clef, or voice timing shifted.",
+          "responsibleFunction": "pitchToMidi / readPartTimeline"
+        }
+      ],
+      "pitchMatched": 0,
+      "pitchExpected": 64,
+      "pitchExtra": 64,
+      "playbackUnknownNotes": 0,
+      "noteCount": 64,
+      "set": "development",
+      "title": "Two treble staves named Choir",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-ssa-shared",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "SSA",
+          "actual": "SAT",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        }
+      ],
+      "pitchMatched": 96,
+      "pitchExpected": 96,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 96,
+      "set": "development",
+      "title": "Soprano divisi plus Alto",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-repeat",
+      "passed": false,
+      "failures": [
+        {
+          "category": "performance-route",
+          "expected": "1,2,3,4,1,2,3,4",
+          "actual": "1,2,3,4",
+          "probableCause": "Repeat barlines were not turned into a performance route, or written measures were duplicated.",
+          "responsibleFunction": "buildPerformanceRoute"
+        }
+      ],
+      "pitchMatched": 64,
+      "pitchExpected": 64,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 64,
+      "set": "development",
+      "title": "Simple repeat",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-volta",
+      "passed": false,
+      "failures": [
+        {
+          "category": "performance-route",
+          "expected": "1,2,3,1,2,4",
+          "actual": "1,2,3,4",
+          "probableCause": "Repeat barlines were not turned into a performance route, or written measures were duplicated.",
+          "responsibleFunction": "buildPerformanceRoute"
+        }
+      ],
+      "pitchMatched": 64,
+      "pitchExpected": 64,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 64,
+      "set": "development",
+      "title": "First and second endings",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-solo",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "SA + Solo",
+          "actual": "SAT",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        }
+      ],
+      "pitchMatched": 64,
+      "pitchExpected": 64,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 64,
+      "set": "development",
+      "title": "Solo enters before the choir",
+      "origin": "synthetic"
+    },
+    {
+      "id": "dev-unison",
+      "passed": false,
+      "failures": [
+        {
+          "category": "voicing",
+          "expected": "Unison",
+          "actual": "S",
+          "probableCause": "Choir voices were mapped onto the wrong section labels.",
+          "responsibleFunction": "assignChoirRegisters / inferChoirVoicing"
+        }
+      ],
+      "pitchMatched": 16,
+      "pitchExpected": 16,
+      "pitchExtra": 0,
+      "playbackUnknownNotes": 0,
+      "noteCount": 16,
+      "set": "development",
+      "title": "Unison line",
+      "origin": "synthetic"
+    },
+    {
+      "id": "pd-bwv255",
+      "passed": false,
+      "failures": [
+        {
+          "category": "performance-route",
+          "expected": "0,1,2,3,4,4,5,6,7,8",
+          "actual": "0,1,2,3,4,6,5,6,7,8",
+          "probableCause": "Repeat barlines were not turned into a performance route, or written measures were duplicated.",
+          "responsibleFunction": "buildPerformanceRoute"
+        },
+        {
+          "category": "duration",
+          "expected": "139 events",
+          "actual": "matched 133, missing 4, extra 6, pitch 0, duration 2. missing P1 beat 16 midi 72",
+          "probableCause": "Tied notes were stored as separate short events.",
+          "responsibleFunction": "mergeTiedNotes"
+        }
+      ],
+      "pitchMatched": 133,
+      "pitchExpected": 139,
+      "pitchExtra": 6,
+      "playbackUnknownNotes": 0,
+      "noteCount": 141,
+      "set": "regression",
+      "title": "Bach BWV 255",
+      "origin": "encoded-public-domain"
+    },
+    {
+      "id": "pd-bwv101-7",
+      "passed": false,
+      "failures": [
+        {
+          "category": "key",
+          "expected": "0:D minor",
+          "actual": "0:F major",
+          "probableCause": "Only the first signature was kept, or minor mode was ignored.",
+          "responsibleFunction": "readKeyRegions"
+        },
+        {
+          "category": "performance-route",
+          "expected": "0,1,2,3,4,4,5,6,7,8,8,9,10,11,12",
+          "actual": "0,1,2,3,4,6,5,6,7,8,11,9,10,11,12",
+          "probableCause": "Repeat barlines were not turned into a performance route, or written measures were duplicated.",
+          "responsibleFunction": "buildPerformanceRoute"
+        },
+        {
+          "category": "duration",
+          "expected": "207 events",
+          "actual": "matched 198, missing 8, extra 9, pitch 0, duration 1. missing P1 beat 16 midi 69",
+          "probableCause": "Tied notes were stored as separate short events.",
+          "responsibleFunction": "mergeTiedNotes"
+        }
+      ],
+      "pitchMatched": 198,
+      "pitchExpected": 207,
+      "pitchExtra": 9,
+      "playbackUnknownNotes": 0,
+      "noteCount": 208,
+      "set": "regression",
+      "title": "Bach BWV 101.7",
+      "origin": "encoded-public-domain"
+    }
+  ],
+  "omr": null,
+  "componentMap": [
+    "PDF / image ingestion: src/app/api/my-music/process/route.ts and src/app/api/score/recognize/route.ts",
+    "Add Pages: src/app/api/my-music/[id]/replace-pages/route.ts",
+    "Audiveris integration: src/lib/server/omr/audiveris-provider.ts (AudiverisOMRService)",
+    "Pipeline entry: src/lib/server/score-processing.ts processFileToParsedScore",
+    "MusicXML parser: src/lib/musicxml.ts parseMusicXmlToScore",
+    "There is no separate ScoreStructureAnalyzer, GlobalVoicingDiscovery, StaffMapper, ChoirMapper, MeasureParser, KeySignatureParser, RepeatNavigator, or PlaybackModelBuilder module.",
+    "Rehearsal playback: src/lib/score-player.ts ScorePlayer, fed by already-parsed note events",
+    "Legacy behavior still in this tree: unnamed voices are filled into SATB slots by pitch rank in autoResolveUnknownParts; two staves are treated as piano."
+  ]
+}
