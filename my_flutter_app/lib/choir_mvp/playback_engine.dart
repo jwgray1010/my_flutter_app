@@ -202,6 +202,17 @@ class PlaybackEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setEnabledParts(Set<ChoirPart> enabled) {
+    for (final part in ChoirPart.values) {
+      final shouldEnable = enabled.contains(part);
+      _partGain[part] = shouldEnable ? 1.0 : 0.0;
+      if (!shouldEnable) {
+        _stopNotesForPart(part);
+      }
+    }
+    notifyListeners();
+  }
+
   void setLoopA(int requestedMeasure) {
     final currentScore = _score;
     if (currentScore == null) {
@@ -236,6 +247,65 @@ class PlaybackEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> playStartingPitches({
+    Set<ChoirPart>? preferredParts,
+  }) async {
+    final currentScore = _score;
+    if (currentScore == null) {
+      return;
+    }
+    if (!_soundfontReady) {
+      await initializeAudio();
+    }
+    if (!_soundfontReady || _soundfontId == null) {
+      return;
+    }
+
+    final parts = (preferredParts == null || preferredParts.isEmpty)
+        ? enabledParts
+        : preferredParts;
+    if (parts.isEmpty) {
+      return;
+    }
+
+    final firstNoteByPart = <ChoirPart, ScoreNote>{};
+    for (final note in currentScore.notes) {
+      if (!parts.contains(note.part)) {
+        continue;
+      }
+      firstNoteByPart.putIfAbsent(note.part, () => note);
+      if (firstNoteByPart.length == parts.length) {
+        break;
+      }
+    }
+    if (firstNoteByPart.isEmpty) {
+      return;
+    }
+
+    final notes = firstNoteByPart.values.toList()
+      ..sort((a, b) => a.part.index.compareTo(b.part.index));
+    for (final note in notes) {
+      unawaited(
+        _midi.playNote(
+          sfId: _soundfontId!,
+          channel: note.part.midiChannel,
+          key: note.midi,
+          velocity: 100,
+        ),
+      );
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 950));
+    for (final note in notes) {
+      unawaited(
+        _midi.stopNote(
+          sfId: _soundfontId!,
+          channel: note.part.midiChannel,
+          key: note.midi,
+        ),
+      );
+    }
+  }
+
   Map<String, dynamic> snapshotState() {
     final currentScore = _score;
     return {
@@ -248,6 +318,7 @@ class PlaybackEngine extends ChangeNotifier {
       'loopB': _loopB,
       'enabledParts': enabledParts.map((part) => part.id).toList(),
       'measures': currentScore?.measureNumbers ?? <int>[],
+      'rehearsalMarks': currentScore?.rehearsalMarks ?? <String, int>{},
       'measureMap': currentScore?.measureMap.map((entry) => entry.toJson()).toList() ?? <Map<String, dynamic>>[],
       'audioStatus': _audioStatus,
     };
