@@ -2,6 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScorePlayer, type PlaybackSnapshot } from "@/lib/score-player";
+import {
+  ACCOMPANIMENT_OPTIONS,
+  CHOIR_VOICING_OPTIONS,
+  OLD_PIPELINE_MESSAGE,
+  STAFF_LAYOUT_OPTIONS,
+  isCurrentPipeline,
+  type AccompanimentChoice,
+  type ChoirVoicingId,
+  type PlaybackChannel,
+  type StaffLayoutId,
+} from "@/lib/score-model";
+import { readApiJson, resolveRecognitionResult } from "@/lib/read-api-json";
 import type {
   AssignablePartId,
   CanonicalPartId,
@@ -74,7 +86,15 @@ export default function Home() {
   const [measureEntryError, setMeasureEntryError] = useState<string | null>(null);
   const [loopStartMeasure, setLoopStartMeasure] = useState("1");
   const [loopEndMeasure, setLoopEndMeasure] = useState("2");
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [pendingPages, setPendingPages] = useState<File[]>([]);
+  const [choirVoicing, setChoirVoicing] = useState<ChoirVoicingId>("AUTO");
+  const [accompanimentChoice, setAccompanimentChoice] = useState<AccompanimentChoice>("AUTO");
+  const [staffLayout, setStaffLayout] = useState<StaffLayoutId>("AUTO");
+  const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string> | null>(null);
+  const [correctionVoicing, setCorrectionVoicing] = useState<ChoirVoicingId>("SATB");
+  const [correctionScope, setCorrectionScope] = useState<"REST_OF_SCORE" | "SYSTEM" | "LAYOUT_REGION">(
+    "REST_OF_SCORE"
+  );
   const [savedMusic, setSavedMusic] = useState<SavedScoreSummary[]>([]);
   const [savedMusicLoading, setSavedMusicLoading] = useState(true);
   const [currentScoreId, setCurrentScoreId] = useState<string | null>(null);
@@ -145,8 +165,21 @@ export default function Home() {
   }, [countInMeasures, score]);
 
   useEffect(() => {
+    const channels = score?.scoreModel?.playback.channels ?? [];
+    if (!channels.length) {
+      setSelectedChannelIds(null);
+      return;
+    }
+    setSelectedChannelIds(new Set(channels.map((channel) => channel.id)));
+  }, [score]);
+
+  useEffect(() => {
+    if (selectedChannelIds) {
+      playerRef.current?.setEnabledPartIds(selectedChannelIds);
+      return;
+    }
     playerRef.current?.setEnabledCanonicalParts(selectedParts);
-  }, [selectedParts]);
+  }, [selectedChannelIds, selectedParts]);
 
   useEffect(() => {
     playerRef.current?.setCountInMeasures(countInMeasures);
@@ -156,7 +189,7 @@ export default function Home() {
     try {
       setSavedMusicLoading(true);
       const response = await fetch("/api/my-music");
-      const body = (await response.json()) as { items?: SavedScoreSummary[]; message?: string };
+      const body = (await readApiJson(response)) as { items?: SavedScoreSummary[]; message?: string };
       if (!response.ok) {
         throw new Error(body.message ?? "Failed to load My Music.");
       }
@@ -173,7 +206,7 @@ export default function Home() {
     let isCancelled = false;
     void fetch("/api/my-music")
       .then(async (response) => {
-        const body = (await response.json()) as { items?: SavedScoreSummary[]; message?: string };
+        const body = (await readApiJson(response)) as { items?: SavedScoreSummary[]; message?: string };
         if (!response.ok) {
           throw new Error(body.message ?? "Failed to load My Music.");
         }
@@ -240,7 +273,7 @@ export default function Home() {
   const fetchSavedScoreRecord = useCallback(
     async (id: string) => {
       const response = await fetch(`/api/my-music/${id}`);
-      const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+      const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
       if (!response.ok || !body.item) {
         throw new Error(body.message ?? "Could not load saved score.");
       }
@@ -250,11 +283,11 @@ export default function Home() {
   );
 
   const runRecognition = useCallback(async () => {
-    if (!pendingFile) {
+    if (!pendingPages.length) {
       return;
     }
-    const file = pendingFile;
-    setPendingFile(null);
+    const pages = pendingPages;
+    setPendingPages([]);
     setError(null);
     setFeedbackMessage(null);
     setIsBusy(true);
@@ -265,19 +298,24 @@ export default function Home() {
     }, 1000);
     try {
       const formData = new FormData();
-      formData.append("file", file);
+      for (const page of pages) {
+        formData.append("file", page);
+      }
+      formData.append("choirVoicing", choirVoicing);
+      formData.append("accompaniment", accompanimentChoice);
+      formData.append("staffLayout", staffLayout);
       const response = await fetch("/api/my-music/process", {
         method: "POST",
         body: formData,
       });
-      const body = (await response.json()) as {
+      const body = await resolveRecognitionResult<{
         message?: string;
         diagnostics?: OMRDiagnostics;
         parsedScore?: ParsedScore;
         savedScore?: SavedScoreSummary;
         warnings?: string[];
-      };
-      if (!response.ok || !body.parsedScore || !body.savedScore) {
+      }>(response);
+      if (!body.parsedScore || !body.savedScore) {
         throw new Error(body.message ?? "Recognition failed.");
       }
       const savedRecord = await fetchSavedScoreRecord(body.savedScore.id);
@@ -291,7 +329,15 @@ export default function Home() {
       clearInterval(tickTimer);
       setIsBusy(false);
     }
-  }, [fetchSavedScoreRecord, hydrateFromSavedRecord, pendingFile, refreshSavedMusic]);
+  }, [
+    accompanimentChoice,
+    choirVoicing,
+    fetchSavedScoreRecord,
+    hydrateFromSavedRecord,
+    pendingPages,
+    refreshSavedMusic,
+    staffLayout,
+  ]);
 
   const loadSavedScore = async (id: string, targetPanel: DirectorPanel = "rehearsal") => {
     try {
@@ -326,7 +372,7 @@ export default function Home() {
       }
       return;
     }
-    const body = (await response.json()) as { message?: string };
+    const body = (await readApiJson(response)) as { message?: string };
     setError(body.message ?? "Failed to rename score.");
   };
 
@@ -337,16 +383,28 @@ export default function Home() {
     if (!confirmed) {
       return;
     }
-    const response = await fetch(`/api/my-music/${item.id}/reprocess`, { method: "POST" });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
-    if (!response.ok || !body.item) {
-      setError(body.message ?? "Failed to reprocess score.");
-      return;
-    }
-    setFeedbackMessage("Score reprocessed.");
-    await refreshSavedMusic();
-    if (currentScoreId === item.id) {
-      hydrateFromSavedRecord(body.item, activePanel === "check-score" ? "check-score" : "review");
+    setError(null);
+    setFeedbackMessage("Processing. A long score can take several minutes. Keep this tab open.");
+    setIsBusy(true);
+    try {
+      const response = await fetch(`/api/my-music/${item.id}/reprocess`, { method: "POST" });
+      const body = await resolveRecognitionResult<{ item?: SavedScoreRecord; message?: string }>(response);
+      if (!body.item) {
+        setFeedbackMessage(null);
+        setError(body.message ?? "Failed to reprocess score.");
+        return;
+      }
+      setFeedbackMessage("Score reprocessed.");
+      await refreshSavedMusic();
+      if (currentScoreId === item.id) {
+        hydrateFromSavedRecord(body.item, activePanel === "check-score" ? "check-score" : "review");
+      }
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Failed to reprocess score.";
+      setFeedbackMessage(null);
+      setError(message);
+    } finally {
+      setIsBusy(false);
     }
   };
 
@@ -369,21 +427,33 @@ export default function Home() {
     if (Number.isFinite(pageNumber) && pageNumber > 0) {
       formData.append("pageNumber", String(Math.round(pageNumber)));
     }
-    const response = await fetch(`/api/my-music/${replaceTargetId}/replace-pages`, {
-      method: "POST",
-      body: formData,
-    });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
-    if (!response.ok || !body.item) {
-      setError(body.message ?? "Failed to replace score pages.");
-      return;
+    setError(null);
+    setFeedbackMessage("Processing. A long score can take several minutes. Keep this tab open.");
+    setIsBusy(true);
+    try {
+      const response = await fetch(`/api/my-music/${replaceTargetId}/replace-pages`, {
+        method: "POST",
+        body: formData,
+      });
+      const body = await resolveRecognitionResult<{ item?: SavedScoreRecord; message?: string }>(response);
+      if (!body.item) {
+        setFeedbackMessage(null);
+        setError(body.message ?? "Failed to replace score pages.");
+        return;
+      }
+      setFeedbackMessage("Pages replaced and score reprocessed.");
+      await refreshSavedMusic();
+      if (currentScoreId === replaceTargetId) {
+        hydrateFromSavedRecord(body.item, activePanel === "check-score" ? "check-score" : "review");
+      }
+      setReplaceTargetId(null);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Failed to replace score pages.";
+      setFeedbackMessage(null);
+      setError(message);
+    } finally {
+      setIsBusy(false);
     }
-    setFeedbackMessage("Pages replaced and score reprocessed.");
-    await refreshSavedMusic();
-    if (currentScoreId === replaceTargetId) {
-      hydrateFromSavedRecord(body.item, activePanel === "check-score" ? "check-score" : "review");
-    }
-    setReplaceTargetId(null);
   };
 
   const deleteSavedScore = async (item: SavedScoreSummary) => {
@@ -392,7 +462,7 @@ export default function Home() {
     }
     const response = await fetch(`/api/my-music/${item.id}`, { method: "DELETE" });
     if (!response.ok) {
-      const body = (await response.json()) as { message?: string };
+      const body = (await readApiJson(response)) as { message?: string };
       setError(body.message ?? "Failed to delete score.");
       return;
     }
@@ -439,6 +509,47 @@ export default function Home() {
       next.add(part);
     }
     setSelectedParts(next);
+  };
+
+  const playbackChannels = score?.scoreModel?.playback.channels ?? [];
+
+  const handleToggleChannel = (channelId: string) => {
+    setSelectedChannelIds((current) => {
+      const next = new Set(current ?? playbackChannels.map((channel) => channel.id));
+      if (next.has(channelId)) {
+        next.delete(channelId);
+      } else {
+        next.add(channelId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectChoirChannels = () => {
+    setSelectedChannelIds(new Set(playbackChannels.filter((channel) => channel.group === "CHOIR").map((channel) => channel.id)));
+  };
+
+  const saveVoicingCorrection = async () => {
+    if (!currentScoreId) {
+      return;
+    }
+    const response = await fetch(`/api/my-music/${currentScoreId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "lockVoicing",
+        voicing: correctionVoicing,
+        scope: correctionScope,
+        targetId: correctionScope === "SYSTEM" ? "1" : correctionScope === "LAYOUT_REGION" ? "layout-1" : null,
+      }),
+    });
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
+    if (!response.ok || !body.item) {
+      setError(body.message ?? "Could not save the correction.");
+      return;
+    }
+    hydrateFromSavedRecord(body.item, "review");
+    setFeedbackMessage("Director correction saved.");
   };
 
   const handleGotoMeasureChange = (value: string) => {
@@ -513,7 +624,7 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "updateAssignments", assignments }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not update part assignment.");
       return;
@@ -544,7 +655,7 @@ export default function Home() {
         displayNumber: Math.round(shouldBe),
       }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not save measure numbering.");
       return;
@@ -571,7 +682,7 @@ export default function Home() {
         displayNumber: Math.round(shouldBe),
       }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not save starting measure.");
       return;
@@ -600,7 +711,7 @@ export default function Home() {
         note: boundaryNote || "Measure boundary is wrong",
       }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not flag measure boundary.");
       return;
@@ -637,7 +748,7 @@ export default function Home() {
         events,
       }),
     });
-    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    const body = (await readApiJson(response)) as { item?: SavedScoreRecord; message?: string };
     if (!response.ok || !body.item) {
       setError(body.message ?? "Could not save measure edits.");
       return;
@@ -722,6 +833,10 @@ export default function Home() {
             availableCanonicalParts={availableCanonicalParts}
             onTogglePart={handleTogglePart}
             onSelectAllParts={handleSetAllParts}
+            channels={playbackChannels}
+            selectedChannelIds={selectedChannelIds}
+            onToggleChannel={handleToggleChannel}
+            onSelectChoirChannels={handleSelectChoirChannels}
             largeButtons
           />
         </main>
@@ -768,6 +883,10 @@ export default function Home() {
             availableCanonicalParts={availableCanonicalParts}
             onTogglePart={handleTogglePart}
             onSelectAllParts={handleSetAllParts}
+            channels={playbackChannels}
+            selectedChannelIds={selectedChannelIds}
+            onToggleChannel={handleToggleChannel}
+            onSelectChoirChannels={handleSelectChoirChannels}
             largeButtons
           />
         </main>
@@ -830,9 +949,53 @@ export default function Home() {
           <section className="rounded-3xl border border-zinc-700 bg-[#20242b] p-5">
             <h2 className="text-lg font-semibold">Upload Score</h2>
             <p className="mt-1 text-sm text-zinc-300">
-              Local workflow: Upload file → Process music → Rehearsal playback.
+              One PDF, one image, or several pages all use the same score engine after the pages are ordered.
             </p>
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <label className="text-sm text-zinc-300">
+                Choir voicing
+                <select
+                  value={choirVoicing}
+                  onChange={(event) => setChoirVoicing(event.target.value as ChoirVoicingId)}
+                  className="mt-1 w-full rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2"
+                >
+                  {CHOIR_VOICING_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm text-zinc-300">
+                Accompaniment
+                <select
+                  value={accompanimentChoice}
+                  onChange={(event) => setAccompanimentChoice(event.target.value as AccompanimentChoice)}
+                  className="mt-1 w-full rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2"
+                >
+                  {ACCOMPANIMENT_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm text-zinc-300">
+                Main choir staves
+                <select
+                  value={staffLayout}
+                  onChange={(event) => setStaffLayout(event.target.value as StaffLayoutId)}
+                  className="mt-1 w-full rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2"
+                >
+                  {STAFF_LAYOUT_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <ControlButton
                 label="UPLOAD SCORE"
                 accent
@@ -840,9 +1003,14 @@ export default function Home() {
                 disabled={isBusy}
               />
               <ControlButton
+                label="ADD PAGE"
+                onClick={() => uploadInputRef.current?.click()}
+                disabled={isBusy}
+              />
+              <ControlButton
                 label="PROCESS MUSIC"
                 onClick={() => void runRecognition()}
-                disabled={isBusy || !pendingFile}
+                disabled={isBusy || pendingPages.length === 0}
               />
             </div>
             <button
@@ -857,24 +1025,65 @@ export default function Home() {
               className="hidden"
               type="file"
               accept=".jpg,.jpeg,.png,.pdf"
+              multiple
               onChange={(event) => {
-                const file = event.target.files?.[0] ?? null;
-                setPendingFile(file);
+                const files = Array.from(event.target.files ?? []);
+                if (files.length) {
+                  setPendingPages((current) => [...current, ...files]);
+                }
                 setError(null);
                 event.currentTarget.value = "";
               }}
             />
-            <p className="mt-3 text-sm text-zinc-300">
-              {pendingFile ? pendingFile.name : "[no file selected]"}
-            </p>
+            <div className="mt-3 space-y-2">
+              {pendingPages.length ? (
+                pendingPages.map((page, index) => (
+                  <div key={`${page.name}-${index}`} className="flex items-center gap-2 rounded-lg border border-zinc-700 px-3 py-2">
+                    <p className="flex-1 text-sm text-zinc-200">
+                      {index + 1}. {page.name}
+                    </p>
+                    <button
+                      type="button"
+                      className="rounded bg-zinc-700 px-2 py-1 text-xs"
+                      onClick={() =>
+                        setPendingPages((current) => movePage(current, index, index - 1))
+                      }
+                      disabled={index === 0}
+                    >
+                      Up
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded bg-zinc-700 px-2 py-1 text-xs"
+                      onClick={() =>
+                        setPendingPages((current) => movePage(current, index, index + 1))
+                      }
+                      disabled={index === pendingPages.length - 1}
+                    >
+                      Down
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded bg-zinc-700 px-2 py-1 text-xs"
+                      onClick={() =>
+                        setPendingPages((current) => current.filter((_, pageIndex) => pageIndex !== index))
+                      }
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-zinc-300">[no file selected]</p>
+              )}
+            </div>
             {isBusy ? (
               <div className="mt-3 rounded-xl border border-cyan-700/60 bg-cyan-950/20 p-3">
                 <p className="text-sm font-semibold text-cyan-300">
                   PROCESSING MUSIC... ({processingElapsedSeconds}s)
                 </p>
                 <p className="mt-1 text-xs text-cyan-100">
-                  Multi-page PDFs and larger files can take a minute or more. This is normal —
-                  please keep this tab open and wait for it to finish.
+                  Multi-page PDFs can take several minutes. Keep this tab open until this finishes.
                 </p>
               </div>
             ) : null}
@@ -973,6 +1182,14 @@ export default function Home() {
             {loadedScoreRecord ? (
               <>
                 <p className="mt-2 text-sm text-zinc-300">{loadedScoreRecord.title}</p>
+                {!isCurrentPipeline(loadedScoreRecord.parsedScore) ? (
+                  <p className="mt-3 rounded-xl border border-amber-700 bg-amber-950/40 p-3 text-sm text-amber-100">
+                    {OLD_PIPELINE_MESSAGE}
+                  </p>
+                ) : null}
+                {loadedScoreRecord.parsedScore.scoreModel ? (
+                  <RecognitionSummary score={loadedScoreRecord.parsedScore} />
+                ) : null}
 
                 <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-900/40 p-4">
                   <p className="text-sm font-semibold text-zinc-200">
@@ -1037,6 +1254,40 @@ export default function Home() {
                         ))}
                       </ul>
                     ) : null}
+                  </div>
+                ) : null}
+
+                {loadedScoreRecord.parsedScore.scoreModel ? (
+                  <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-900/40 p-4">
+                    <p className="text-sm font-semibold text-zinc-200">Director correction</p>
+                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <select
+                        value={correctionVoicing}
+                        onChange={(event) => setCorrectionVoicing(event.target.value as ChoirVoicingId)}
+                        className="rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2"
+                      >
+                        {CHOIR_VOICING_OPTIONS.filter((option) => option.id !== "AUTO").map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={correctionScope}
+                        onChange={(event) =>
+                          setCorrectionScope(event.target.value as "REST_OF_SCORE" | "SYSTEM" | "LAYOUT_REGION")
+                        }
+                        className="rounded-lg border border-zinc-600 bg-zinc-900 px-3 py-2"
+                      >
+                        <option value="REST_OF_SCORE">Rest of score</option>
+                        <option value="SYSTEM">This system</option>
+                        <option value="LAYOUT_REGION">This layout region</option>
+                      </select>
+                      <ControlButton
+                        label="APPLY CORRECTION"
+                        onClick={() => void saveVoicingCorrection()}
+                      />
+                    </div>
                   </div>
                 ) : null}
 
@@ -1379,6 +1630,10 @@ export default function Home() {
               availableCanonicalParts={availableCanonicalParts}
               onTogglePart={handleTogglePart}
               onSelectAllParts={handleSetAllParts}
+              channels={playbackChannels}
+              selectedChannelIds={selectedChannelIds}
+              onToggleChannel={handleToggleChannel}
+              onSelectChoirChannels={handleSelectChoirChannels}
             />
             <div className="mt-5 rounded-xl border border-zinc-700 bg-zinc-900/35 p-3">
               <h3 className="text-sm font-semibold">Detected Parts</h3>
@@ -1677,6 +1932,10 @@ function RemoteControlPanel(props: {
   availableCanonicalParts: Set<CanonicalPartId>;
   onTogglePart: (part: CanonicalPartId) => void;
   onSelectAllParts: () => void;
+  channels?: PlaybackChannel[];
+  selectedChannelIds?: Set<string> | null;
+  onToggleChannel?: (channelId: string) => void;
+  onSelectChoirChannels?: () => void;
   largeButtons?: boolean;
 }) {
   const sizeClasses = props.largeButtons
@@ -1718,6 +1977,37 @@ function RemoteControlPanel(props: {
       <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
         <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">PARTS</p>
         <div className="grid grid-cols-3 gap-2">
+          {props.channels && props.channels.length > 0 ? (
+            <>
+              <button
+                type="button"
+                onClick={props.onSelectChoirChannels}
+                disabled={!props.scoreLoaded}
+                className="rounded-xl bg-zinc-700 px-3 py-6 text-xl font-bold text-zinc-100"
+              >
+                ALL CHOIR
+              </button>
+              {props.channels.map((channel) => {
+                const selected = props.selectedChannelIds?.has(channel.id) ?? false;
+                return (
+                  <button
+                    key={channel.id}
+                    type="button"
+                    onClick={() => props.onToggleChannel?.(channel.id)}
+                    className={`rounded-xl px-3 py-6 text-lg font-bold ${
+                      selected ? "bg-cyan-400 text-black" : "bg-zinc-700 text-zinc-100"
+                    }`}
+                  >
+                    {channel.label}
+                    {channel.entersAtMeasure != null && channel.entersAtMeasure > 1
+                      ? ` m.${channel.entersAtMeasure}`
+                      : ""}
+                  </button>
+                );
+              })}
+            </>
+          ) : (
+            <>
           <button
             type="button"
             onClick={props.onSelectAllParts}
@@ -1751,6 +2041,8 @@ function RemoteControlPanel(props: {
               </button>
             );
           })}
+            </>
+          )}
         </div>
       </div>
 
@@ -1957,6 +2249,85 @@ function allPartsSelected(
     }
   }
   return availableCanonicalParts.size > 0;
+}
+
+function movePage(pages: File[], from: number, to: number) {
+  if (to < 0 || to >= pages.length) {
+    return pages;
+  }
+  const next = [...pages];
+  const [page] = next.splice(from, 1);
+  next.splice(to, 0, page);
+  return next;
+}
+
+function RecognitionSummary(props: { score: ParsedScore }) {
+  const model = props.score.scoreModel;
+  if (!model) {
+    return null;
+  }
+  const key = model.keySignatureRegions[0]?.label ?? "Unknown";
+  const meter = model.timeSignatureRegions.map((region) => region.timeSignature).join(" → ") || "Unknown";
+  const needsReview = model.recognitionWarnings.filter((warning) =>
+    ["KEY_FLICKER", "KEY_DISAGREEMENT", "KEY_SINGLE_STAFF", "RHYTHM_DURATION", "PART_COUNT", "NAVIGATION"].includes(
+      warning.code
+    )
+  );
+  return (
+    <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-900/40 p-4 text-sm text-zinc-200">
+      <p>Voicing: {model.mainChoirVoicing}{model.voicingLocked ? " (locked)" : ""}</p>
+      <p className="mt-1">Accompaniment: {model.accompaniment.kind === "NONE" ? "A cappella / none" : model.accompaniment.kind === "PIANO" ? "Piano" : "Other"}</p>
+      <p className="mt-1">Key: {key}</p>
+      <p className="mt-1">Meter: {meter}</p>
+      <p className="mt-1">Parts: {model.logicalParts.map((part) => part.label).join(", ") || "None"}</p>
+      <p className="mt-1">
+        Entrances:{" "}
+        {model.playback.channels
+          .map((channel) => `${channel.label} — m.${channel.entersAtMeasure ?? "—"}`)
+          .join("; ") || "None"}
+      </p>
+      <p className="mt-1">
+        Extra parts: {model.extraPlayableParts.map((part) => part.label).join(", ") || "None"}
+      </p>
+      <p className="mt-1">
+        Navigation: {model.navigationEvents.map((event) => event.kind).filter((kind, index, list) => list.indexOf(kind) === index).join(", ") || "None"}
+      </p>
+      <div className="mt-3">
+        <p className="font-semibold">Needs review</p>
+        {needsReview.length ? (
+          <ul className="mt-1 list-disc pl-5 text-amber-200">
+            {needsReview.slice(0, 8).map((warning) => (
+              <li key={`${warning.code}-${warning.message}`}>{warning.message}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-zinc-400">None</p>
+        )}
+      </div>
+      {process.env.NODE_ENV !== "production" ? (
+        <pre className="mt-3 overflow-auto rounded bg-black/40 p-3 text-xs text-zinc-300">
+{`DEBUG SCORE STRUCTURE
+Pipeline ${model.pipelineVersion}
+Upload ${model.sourceUploadType}
+Pages ${model.pageCount}
+Systems ${model.systems.length}
+Voicing ${model.lockedVoicing ?? model.mainChoirVoicing}
+Logical parts ${model.logicalParts.map((part) => part.label).join(", ")}
+Main choir ${model.mainChoirGroup?.staves.join(", ") ?? "none"}
+Accompaniment ${model.accompaniment.kind}
+Extra ${model.extraPlayableParts.map((part) => part.label).join(", ") || "none"}
+First choir system ${model.firstMainChoirSystem ?? "none"}
+Measures ${model.writtenMeasures.length}
+Keys ${model.keySignatureRegions.map((region) => `${region.startMeasure}:${region.label}`).join(", ") || "none"}
+Meters ${model.timeSignatureRegions.map((region) => `${region.startMeasure}:${region.timeSignature}`).join(", ")}
+Layouts ${model.layoutRegions.length}
+Navigation ${model.navigationEvents.length}
+Events ${Object.entries(model.playback.eventCountByChannel).map(([id, count]) => `${id}:${count}`).join(", ")}
+Warnings ${model.recognitionWarnings.length}`}
+        </pre>
+      ) : null}
+    </div>
+  );
 }
 
 function ControlButton(props: {

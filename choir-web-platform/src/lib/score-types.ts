@@ -25,6 +25,8 @@ export interface RecognizedPart {
   needsConfirmation: boolean;
   /** Solo or descant line kept distinct from the choir voicing. */
   isSolo?: boolean;
+  /** Featured or optional line that is playable and is not a main-choir voice. */
+  extraKind?: "SOLO" | "DESCANT" | "CUE" | "OPTIONAL" | "SMALL_GROUP" | "FEATURED" | null;
   /** Lowest/highest MIDI pitch actually sung/played by this voice, and the
    * display measure range it appears in - shown to help a director
    * identify which detected voice is which choir part. */
@@ -42,6 +44,13 @@ export interface NoteEvent {
   durationBeats: number;
   measureNumber: number;
   velocity: number;
+  xmlVoice?: number | null;
+  physicalStaff?: number | null;
+  tieStart?: boolean;
+  tieStop?: boolean;
+  chord?: boolean;
+  /** Shared unison: one sounding event may be referenced by more than one logical part. */
+  unisonGroupId?: string | null;
 }
 
 export interface KeyRegion {
@@ -81,6 +90,8 @@ export interface ParsedScore {
   performanceRoute?: number[];
   rehearsalMarks: Record<string, number>;
   rawMusicXml: string;
+  /** Authoritative structure for scores processed by the unified pipeline. */
+  scoreModel?: import("@/lib/score-model").ScoreModel;
 }
 
 export interface OMRDiagnostics {

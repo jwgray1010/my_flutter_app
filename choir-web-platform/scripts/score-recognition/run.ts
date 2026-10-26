@@ -30,6 +30,11 @@ interface LoadedFixture {
   verified: boolean;
   unverifiedReason?: string | null;
   omrProbe?: boolean;
+  setup?: {
+    choirVoicing: "AUTO" | "UNISON" | "TWO_PART" | "SA" | "SS" | "SSA" | "SSAA" | "SAT" | "SAB" | "SATB" | "TTB" | "TTBB" | "SSAATTBB" | "CUSTOM";
+    accompaniment: "AUTO" | "NONE" | "PIANO" | "OTHER";
+    staffLayout: "AUTO" | "CUSTOM" | "SATB_SHARED_2" | "SATB_SEPARATE_4" | "SSA_SHARED_2" | "SSA_SEPARATE_3" | "SSAA_SHARED_2" | "SSAA_SEPARATE_4" | "SSAATTBB_SHARED_4" | "SSAATTBB_SEPARATE_8";
+  };
 }
 
 interface RunOptions {
@@ -41,6 +46,8 @@ interface RunOptions {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  const { runArchitectureChecks } = await import("./architecture-checks");
+  await runArchitectureChecks();
   const loaded = await loadFixtures();
   const selected = loaded.filter((fixture) => options.sets.includes(fixture.set));
   const verified = selected.filter((fixture) => fixture.verified);
@@ -61,6 +68,7 @@ async function main() {
         originalFileName: `${fixture.id}.musicxml`,
         mimeType: "application/vnd.recordare.musicxml+xml",
         audiverisOutputDir: path.join(directory, "audiveris"),
+        setup: fixture.setup,
       });
       const firstSchedule = buildPlaybackSchedule(processed.parsedScore);
       const repeatStarted = performance.now();
@@ -173,6 +181,7 @@ async function loadFixtures(): Promise<LoadedFixture[]> {
       expected: realized.expected,
       verified: true,
       omrProbe: spec.omrProbe,
+      setup: spec.setup,
     };
   });
   const chorales = await loadChorales();
@@ -466,9 +475,10 @@ function summarize(
       "Audiveris integration: src/lib/server/omr/audiveris-provider.ts (AudiverisOMRService)",
       "Pipeline entry: src/lib/server/score-processing.ts processFileToParsedScore",
       "MusicXML parser: src/lib/musicxml.ts parseMusicXmlToScore",
-      "There is no separate ScoreStructureAnalyzer, GlobalVoicingDiscovery, StaffMapper, ChoirMapper, MeasureParser, KeySignatureParser, RepeatNavigator, or PlaybackModelBuilder module.",
-      "Rehearsal playback: src/lib/score-player.ts ScorePlayer, fed by already-parsed note events",
-      "Unnamed voices are assigned by register in src/lib/voicing.ts. A part is piano when its name says so, or when it is a treble-plus-bass grand staff. Repeats are listed in performanceRoute and are not copied into the written measure list.",
+      "One musical interpreter: src/lib/unified-pipeline.ts interpretUnifiedScore. PDF and image uploads are normalized to ordered pages first.",
+      "Structure, voicing evidence, and validation: src/lib/structure-discovery.ts. PlaybackRouteBuilder: src/lib/playback-model.ts buildPlaybackRoute.",
+      "Rehearsal playback: src/lib/score-player.ts ScorePlayer reads the saved playback model and does not reparse MusicXML.",
+      "Unlabeled voices stay UNKNOWN. Choir identity comes from a director lock, printed ensemble text, or part labels. Pitch order is not applied. A part is piano when its name says so, or when it is a treble-plus-bass grand staff. Repeats and navigation are listed in performanceRoute and are not copied into the written measure list.",
     ],
   };
 }

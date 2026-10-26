@@ -19,11 +19,29 @@ const VOICING_BY_COUNTS: Record<string, string> = {
 };
 
 /**
- * Assigns unnamed choir voices by register instead of filling leftover SATB slots.
- * A treble trio becomes SSA. A low quartet becomes TTBB. Solos are not counted
- * as extra choir sections.
+ * Pitch order is not a choir assignment. Calling this as a processor is a legacy path.
+ * Use suggestChoirRegistersFromPitch only as a non-authoritative hint.
  */
-export function assignChoirRegisters(parts: RecognizedPart[], notes: NoteEvent[]) {
+export function assignChoirRegisters(_parts: RecognizedPart[], _notes: NoteEvent[]): never {
+  throw new Error(
+    `LEGACY SCORE PROCESSING PATH CALLED\nfunction: assignChoirRegisters\nfile: src/lib/voicing.ts\n${new Error().stack ?? ""}`
+  );
+}
+
+/**
+ * Non-authoritative pitch hint. The unified pipeline does not apply this to a score.
+ */
+export function suggestChoirRegistersFromPitch(parts: RecognizedPart[], notes: NoteEvent[]) {
+  const suggestions = parts.map((part) => ({ ...part }));
+  suggestInto(suggestions, notes);
+  return suggestions.map((part) => ({
+    partId: part.id,
+    canonicalPart: part.canonicalPart,
+    needsConfirmation: part.needsConfirmation,
+  }));
+}
+
+function suggestInto(parts: RecognizedPart[], notes: NoteEvent[]) {
   const midiByPart = new Map<string, number[]>();
   for (const note of notes) {
     const list = midiByPart.get(note.partId) ?? [];
@@ -56,15 +74,16 @@ export function assignChoirRegisters(parts: RecognizedPart[], notes: NoteEvent[]
 }
 
 export function inferChoirVoicing(parts: RecognizedPart[]): string {
-  const solos = parts.filter((part) => part.isSolo);
-  const choir = parts.filter((part) => part.canonicalPart !== "PIANO" && !part.isSolo);
+  const descants = parts.filter((part) => part.extraKind === "DESCANT");
+  const solos = parts.filter((part) => part.extraKind === "SOLO" || (part.isSolo && part.extraKind !== "DESCANT"));
+  const choir = parts.filter((part) => part.canonicalPart !== "PIANO" && !part.isSolo && !part.extraKind);
   let label = "Unknown";
   if (!choir.length) {
     label = parts.some((part) => part.canonicalPart === "PIANO") ? "Piano" : "Unknown";
-  } else if (choir.some((part) => part.canonicalPart === "UNKNOWN")) {
-    label = "Unknown";
   } else if (choir.length === 1) {
     label = "Unison";
+  } else if (choir.some((part) => part.canonicalPart === "UNKNOWN")) {
+    label = "Unknown";
   } else {
     const counts = { SOPRANO: 0, ALTO: 0, TENOR: 0, BASS: 0 };
     for (const part of choir) {
@@ -82,6 +101,9 @@ export function inferChoirVoicing(parts: RecognizedPart[]): string {
   }
   if (solos.length) {
     return `${label} + Solo`;
+  }
+  if (descants.length) {
+    return `${label} + Descant`;
   }
   return label;
 }

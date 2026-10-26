@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { emptyManualCorrections, normalizeManualCorrections } from "@/lib/score-corrections";
+import { isCurrentPipeline } from "@/lib/score-model";
 import type {
   AssignablePartId,
   CanonicalPartId,
@@ -379,7 +380,7 @@ export function getSavedScoreById(id: string): SavedScoreRecord | null {
     audiverisOmrPath: row.audiveris_omr_path,
     audiverisMxlPath: row.audiveris_mxl_path,
     audiverisMusicXmlPath: row.audiveris_musicxml_path,
-    partTextureLabel: buildPartTextureLabel(detectedParts, parsedScore.inferredVoicing),
+    partTextureLabel: buildPartTextureLabel(parsedScore),
     measureCount: parsedScore.measures.length,
     detectedParts,
     lastUsedTempoPercent: row.last_used_tempo_percent,
@@ -485,7 +486,7 @@ function toSummary(row: ScoreRow): SavedScoreSummary {
     title: row.title,
     importedAt: row.imported_at,
     sourceFileName: row.source_filename,
-    partTextureLabel: buildPartTextureLabel(detectedParts, parsedScore.inferredVoicing),
+    partTextureLabel: buildPartTextureLabel(parsedScore),
     measureCount: parsedScore.measures.length,
     detectedParts,
     lastUsedTempoPercent: row.last_used_tempo_percent,
@@ -493,27 +494,16 @@ function toSummary(row: ScoreRow): SavedScoreSummary {
   };
 }
 
-function buildPartTextureLabel(parts: CanonicalPartId[], inferredVoicing?: string) {
-  const hasPiano = parts.includes("PIANO");
-  if (inferredVoicing && inferredVoicing !== "Unknown") {
-    return hasPiano && !inferredVoicing.includes("Piano")
-      ? `${inferredVoicing} + Piano`
-      : inferredVoicing;
+function buildPartTextureLabel(parsedScore: ParsedScore) {
+  if (!isCurrentPipeline(parsedScore)) {
+    return "Older recognition";
   }
-  const set = new Set(parts);
-  const hasSATB =
-    set.has("SOPRANO") && set.has("ALTO") && set.has("TENOR") && set.has("BASS");
-  if (hasSATB && hasPiano) {
-    return "SATB + Piano";
+  const voicing = parsedScore.scoreModel?.mainChoirVoicing || parsedScore.inferredVoicing || "Unknown";
+  const hasPiano = parsedScore.scoreModel?.accompaniment.kind === "PIANO";
+  if (hasPiano && !voicing.toLowerCase().includes("piano")) {
+    return `${voicing} + Piano`;
   }
-  if (hasSATB) {
-    return "SATB";
-  }
-  if (hasPiano) {
-    return "Piano";
-  }
-  const filtered = parts.filter((part) => part !== "UNKNOWN");
-  return filtered.length ? filtered.join(" + ") : "Unknown";
+  return voicing;
 }
 
 function safeParseJson<T>(raw: string | null | undefined, fallback: T): T {

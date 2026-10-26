@@ -1,5 +1,50 @@
 import * as Tone from "tone";
+import type { PlaybackVisit } from "@/lib/score-model";
 import type { CanonicalPartId, ParsedScore } from "@/lib/score-types";
+
+// Salamander Grand Piano (Yamaha C5, Alexander Holm, CC-BY 3.0), one
+// recording every major third. The sampler pitch-shifts the gaps.
+const PIANO_SAMPLE_URLS: Record<string, string> = {
+  A0: "A0.mp3",
+  C1: "C1.mp3",
+  "D#1": "Ds1.mp3",
+  "F#1": "Fs1.mp3",
+  A1: "A1.mp3",
+  C2: "C2.mp3",
+  "D#2": "Ds2.mp3",
+  "F#2": "Fs2.mp3",
+  A2: "A2.mp3",
+  C3: "C3.mp3",
+  "D#3": "Ds3.mp3",
+  "F#3": "Fs3.mp3",
+  A3: "A3.mp3",
+  C4: "C4.mp3",
+  "D#4": "Ds4.mp3",
+  "F#4": "Fs4.mp3",
+  A4: "A4.mp3",
+  C5: "C5.mp3",
+  "D#5": "Ds5.mp3",
+  "F#5": "Fs5.mp3",
+  A5: "A5.mp3",
+  C6: "C6.mp3",
+  "D#6": "Ds6.mp3",
+  "F#6": "Fs6.mp3",
+  A6: "A6.mp3",
+  C7: "C7.mp3",
+  "D#7": "Ds7.mp3",
+  "F#7": "Fs7.mp3",
+  A7: "A7.mp3",
+  C8: "C8.mp3",
+};
+
+function createPianoVoice(volumeDb: number) {
+  return new Tone.Sampler({
+    urls: PIANO_SAMPLE_URLS,
+    baseUrl: "/samples/piano/",
+    release: 1.1,
+    volume: volumeDb,
+  }).toDestination();
+}
 
 export interface PlaybackSnapshot {
   isPlaying: boolean;
@@ -15,7 +60,9 @@ export interface PlaybackSnapshot {
 export class ScorePlayer {
   private readonly score: ParsedScore;
 
-  private readonly orderedNotes: ParsedScore["notes"];
+  private readonly schedule: ScheduledNote[];
+
+  private readonly visits: PlaybackVisit[] | null;
 
   private readonly enabledParts = new Set<CanonicalPartId>([
     "SOPRANO",
@@ -23,40 +70,31 @@ export class ScorePlayer {
     "TENOR",
     "BASS",
     "PIANO",
+    "UNKNOWN",
   ]);
 
-  private readonly synths: Record<CanonicalPartId, Tone.PolySynth<Tone.Synth>> = {
-    SOPRANO: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.25 },
-      volume: -8,
-    }).toDestination(),
-    ALTO: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.25 },
-      volume: -8,
-    }).toDestination(),
-    TENOR: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.25 },
-      volume: -8,
-    }).toDestination(),
-    BASS: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.3 },
-      volume: -8,
-    }).toDestination(),
-    PIANO: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "sine" },
-      envelope: { attack: 0.005, release: 0.45 },
-      volume: -4,
-    }).toDestination(),
-    UNKNOWN: new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.01, release: 0.25 },
-      volume: -8,
-    }).toDestination(),
+  private enabledPartIds: Set<string> | null = null;
+
+  private readonly soundedUnison = new Set<string>();
+
+  // Every sung line and the piano part use recorded grand-piano notes.
+  // Each part has its own sampler so simultaneous notes do not steal
+  // voices from each other, and so each part can be balanced on its own.
+  private readonly synths: Record<CanonicalPartId, Tone.Sampler> = {
+    SOPRANO: createPianoVoice(-6),
+    ALTO: createPianoVoice(-6),
+    TENOR: createPianoVoice(-6),
+    BASS: createPianoVoice(-7),
+    PIANO: createPianoVoice(-1),
+    UNKNOWN: createPianoVoice(-6),
   };
+
+  private readonly countInClick = new Tone.MembraneSynth({
+    pitchDecay: 0.008,
+    octaves: 4,
+    envelope: { attack: 0.001, decay: 0.12, sustain: 0, release: 0.04 },
+    volume: -8,
+  }).toDestination();
 
   private readonly listeners = new Set<(snapshot: PlaybackSnapshot) => void>();
   private ticker: ReturnType<typeof setInterval> | null = null;
@@ -79,7 +117,32 @@ export class ScorePlayer {
 
   constructor(score: ParsedScore) {
     this.score = score;
-    this.orderedNotes = [...score.notes].sort((a, b) => a.startBeat - b.startBeat);
+    const playback = score.scoreModel?.playback;
+    if (playback) {
+      this.visits = playback.visits;
+      this.schedule = playback.events.map((event) => ({
+        partId: event.partId,
+        partCanonical: event.partCanonical,
+        midi: event.midi,
+        scheduleBeat: event.scheduleBeat,
+        durationBeats: event.durationBeats,
+        velocity: event.velocity,
+        unisonGroupId: event.unisonGroupId,
+      }));
+    } else {
+      this.visits = null;
+      this.schedule = [...score.notes]
+        .sort((a, b) => a.startBeat - b.startBeat)
+        .map((note) => ({
+          partId: note.partId,
+          partCanonical: note.partCanonical,
+          midi: note.midi,
+          scheduleBeat: note.startBeat,
+          durationBeats: note.durationBeats,
+          velocity: note.velocity,
+          unisonGroupId: note.unisonGroupId ?? null,
+        }));
+    }
   }
 
   async initialize() {
@@ -87,6 +150,7 @@ export class ScorePlayer {
       return;
     }
     await Tone.start();
+    await Tone.loaded();
     this.initialized = true;
     this.emitSnapshot();
   }
@@ -96,6 +160,7 @@ export class ScorePlayer {
     for (const synth of Object.values(this.synths)) {
       synth.dispose();
     }
+    this.countInClick.dispose();
     this.listeners.clear();
   }
 
@@ -145,20 +210,27 @@ export class ScorePlayer {
   }
 
   setEnabledCanonicalParts(parts: Iterable<CanonicalPartId>) {
+    this.enabledPartIds = null;
     this.enabledParts.clear();
     for (const part of parts) {
       this.enabledParts.add(part);
     }
   }
 
+  setEnabledPartIds(partIds: Iterable<string> | null) {
+    this.enabledPartIds = partIds ? new Set(partIds) : null;
+  }
+
   seekToMeasure(measureNumber: number) {
+    const visit = this.visits?.find((candidate) => candidate.displayNumber === measureNumber);
     const target = this.score.measures.find(
       (measure) => measure.displayNumber === measureNumber
     );
-    if (!target) {
+    if (!visit && !target) {
       return;
     }
-    this.currentBeat = target.startBeat;
+    this.soundedUnison.clear();
+    this.currentBeat = visit?.startBeat ?? target?.startBeat ?? 0;
     this.playStartBeat = this.currentBeat;
     this.playStartTimeSec = Tone.now();
     this.nextEventIndex = this.findNextNoteIndex(this.currentBeat);
@@ -245,19 +317,20 @@ export class ScorePlayer {
   }
 
   playStartingPitches() {
-    const firstByPart = new Map<CanonicalPartId, number>();
-    for (const note of this.orderedNotes) {
-      if (!this.enabledParts.has(note.partCanonical)) {
+    const firstByPart = new Map<string, { canonical: CanonicalPartId; midi: number }>();
+    for (const note of this.schedule) {
+      if (!this.noteEnabled(note, false)) {
         continue;
       }
-      if (!firstByPart.has(note.partCanonical)) {
-        firstByPart.set(note.partCanonical, note.midi);
+      const key = this.enabledPartIds ? note.partId : note.partCanonical;
+      if (!firstByPart.has(key)) {
+        firstByPart.set(key, { canonical: note.partCanonical, midi: note.midi });
       }
     }
     let offset = 0;
-    for (const [part, midi] of firstByPart) {
-      this.synthFor(part).triggerAttackRelease(
-        Tone.Frequency(midi, "midi").toFrequency(),
+    for (const entry of firstByPart.values()) {
+      this.synthFor(entry.canonical).triggerAttackRelease(
+        Tone.Frequency(entry.midi, "midi").toFrequency(),
         0.7,
         Tone.now() + offset,
         0.85
@@ -302,6 +375,7 @@ export class ScorePlayer {
 
     const loopRange = this.loopBeatRange();
     if (loopRange && currentBeat >= loopRange.endBeat) {
+      this.soundedUnison.clear();
       this.currentBeat = loopRange.startBeat;
       this.playStartBeat = loopRange.startBeat;
       this.playStartTimeSec = Tone.now();
@@ -316,15 +390,15 @@ export class ScorePlayer {
     const now = Tone.now();
 
     while (
-      this.nextEventIndex < this.orderedNotes.length &&
-      this.orderedNotes[this.nextEventIndex].startBeat <= beatWindowEnd
+      this.nextEventIndex < this.schedule.length &&
+      this.schedule[this.nextEventIndex].scheduleBeat <= beatWindowEnd
     ) {
-      const note = this.orderedNotes[this.nextEventIndex];
+      const note = this.schedule[this.nextEventIndex];
       this.nextEventIndex += 1;
-      if (!this.enabledParts.has(note.partCanonical)) {
+      if (!this.noteEnabled(note, true)) {
         continue;
       }
-      const offsetBeats = note.startBeat - currentBeat;
+      const offsetBeats = note.scheduleBeat - currentBeat;
       const when = now + Math.max(0, offsetBeats * this.secondsPerBeat());
       const durSec = Math.max(0.04, note.durationBeats * this.secondsPerBeat());
       this.synthFor(note.partCanonical).triggerAttackRelease(
@@ -335,8 +409,10 @@ export class ScorePlayer {
       );
     }
 
-    const scoreEnd = this.score.measures[this.score.measures.length - 1];
-    if (scoreEnd && this.currentBeat >= scoreEnd.endBeat) {
+    const scoreEndBeat = this.visits?.length
+      ? this.visits[this.visits.length - 1].endBeat
+      : this.score.measures[this.score.measures.length - 1]?.endBeat;
+    if (scoreEndBeat != null && this.currentBeat >= scoreEndBeat) {
       this.pause();
       this.seekToMeasure(this.score.measures[0]?.displayNumber ?? 1);
       return;
@@ -347,6 +423,20 @@ export class ScorePlayer {
   private loopBeatRange() {
     if (this.loopStartMeasure == null || this.loopEndMeasure == null) {
       return null;
+    }
+    if (this.visits?.length) {
+      const selected = this.visits.filter(
+        (visit) =>
+          visit.displayNumber >= (this.loopStartMeasure ?? 0) &&
+          visit.displayNumber <= (this.loopEndMeasure ?? 0)
+      );
+      if (!selected.length) {
+        return null;
+      }
+      return {
+        startBeat: Math.min(...selected.map((visit) => visit.startBeat)),
+        endBeat: Math.max(...selected.map((visit) => visit.endBeat)),
+      };
     }
     const start = this.score.measures.find(
       (measure) => measure.displayNumber === this.loopStartMeasure
@@ -365,10 +455,10 @@ export class ScorePlayer {
 
   private findNextNoteIndex(beat: number) {
     let low = 0;
-    let high = this.orderedNotes.length;
+    let high = this.schedule.length;
     while (low < high) {
       const mid = Math.floor((low + high) / 2);
-      if (this.orderedNotes[mid].startBeat < beat) {
+      if (this.schedule[mid].scheduleBeat < beat) {
         low = mid + 1;
       } else {
         high = mid;
@@ -378,12 +468,41 @@ export class ScorePlayer {
   }
 
   private measureAtBeat(beat: number) {
+    if (this.visits?.length) {
+      for (const visit of this.visits) {
+        if (beat >= visit.startBeat && beat < visit.endBeat) {
+          return visit.displayNumber;
+        }
+      }
+      return this.visits[this.visits.length - 1]?.displayNumber ?? 1;
+    }
     for (const measure of this.score.measures) {
       if (beat >= measure.startBeat && beat < measure.endBeat) {
         return measure.displayNumber;
       }
     }
     return this.score.measures[this.score.measures.length - 1]?.displayNumber ?? 1;
+  }
+
+  private noteEnabled(note: ScheduledNote, markUnison: boolean) {
+    if (this.enabledPartIds) {
+      if (!this.enabledPartIds.has(note.partId)) {
+        return false;
+      }
+    } else if (!this.enabledParts.has(note.partCanonical)) {
+      return false;
+    }
+    if (!note.unisonGroupId) {
+      return true;
+    }
+    const key = `${note.unisonGroupId}|${note.scheduleBeat}|${note.midi}`;
+    if (this.soundedUnison.has(key)) {
+      return false;
+    }
+    if (markUnison) {
+      this.soundedUnison.add(key);
+    }
+    return true;
   }
 
   private synthFor(part: CanonicalPartId) {
@@ -398,6 +517,7 @@ export class ScorePlayer {
   }
 
   private beginPlaybackNow() {
+    this.soundedUnison.clear();
     this.playStartBeat = this.currentBeat;
     this.playStartTimeSec = Tone.now();
   }
@@ -445,9 +565,9 @@ export class ScorePlayer {
   }
 
   private playCountInClick(isDownbeat: boolean) {
-    const frequency = isDownbeat ? 1320 : 880;
-    const volume = isDownbeat ? 0.9 : 0.76;
-    this.synths.UNKNOWN.triggerAttackRelease(frequency, 0.08, Tone.now(), volume);
+    const pitch = isDownbeat ? "C5" : "G4";
+    const velocity = isDownbeat ? 0.9 : 0.62;
+    this.countInClick.triggerAttackRelease(pitch, 0.06, Tone.now(), velocity);
   }
 
   private clearCountInTimer() {
@@ -456,5 +576,15 @@ export class ScorePlayer {
       this.countInTimer = null;
     }
   }
+}
+
+interface ScheduledNote {
+  partId: string;
+  partCanonical: CanonicalPartId;
+  midi: number;
+  scheduleBeat: number;
+  durationBeats: number;
+  velocity: number;
+  unisonGroupId: string | null;
 }
 
