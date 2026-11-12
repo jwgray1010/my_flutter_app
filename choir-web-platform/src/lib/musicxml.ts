@@ -92,6 +92,7 @@ export function readMusicXmlNotation(xmlText: string, sourceType: "musicxml" | "
   const voiceDurations: VoiceDurationFact[] = [];
   const rests: RestFact[] = [];
   const staffTexts: StaffTextFact[] = [];
+  const localMeasureStarts = new Map<string, Map<number, number>>();
 
   partNodes.forEach((partNode, idx) => {
     const sourcePartId = partNode.getAttribute("id") ?? `P${idx + 1}`;
@@ -100,6 +101,27 @@ export function readMusicXmlNotation(xmlText: string, sourceType: "musicxml" | "
       ...readStaffTexts(partNode, sourcePartId, sourceName, abbreviationById.get(sourcePartId) ?? "")
     );
     const partTimeline = idx === 0 ? timeline : readPartTimeline(partNode);
+    localMeasureStarts.set(
+      sourcePartId,
+      new Map(partTimeline.measures.map((measure) => [measure.displayNumber, measure.startBeat]))
+    );
+    if (idx > 0) {
+      const known = new Set(timeline.measures.map((measure) => measure.displayNumber));
+      for (const measure of partTimeline.measures) {
+        if (known.has(measure.displayNumber)) {
+          continue;
+        }
+        known.add(measure.displayNumber);
+        timeline.measures.push({ ...measure, internalIndex: timeline.measures.length });
+        timeline.repeats.push({
+          number: measure.displayNumber,
+          repeatForward: false,
+          repeatBackward: false,
+          repeatTimes: 2,
+          ending: null,
+        });
+      }
+    }
     const staves = estimatePartStaves(partNode);
     const piano = partLooksLikePiano(sourceName, staves, readClefSigns(partNode));
     appendPartNotes(partTimeline.notes, {
@@ -129,6 +151,7 @@ export function readMusicXmlNotation(xmlText: string, sourceType: "musicxml" | "
     }
   });
 
+  alignToCanonicalMeasures(timeline, localMeasureStarts, parts, notes, rests);
   populatePartRanges(parts, notes);
   const keyRegions = timeline.keyRegions;
   const score: ParsedScore = {
@@ -225,7 +248,6 @@ function readPartTimeline(partNode: Element): PartTimeline {
     const voiceEnd = new Map<number, number>();
     let global = 0;
     let currentVoice = 1;
-    let positioned = true;
     let lastChordStart = 0;
     const repeat: RepeatMeasure = {
       number: measureNumber,
@@ -319,12 +341,10 @@ function readPartTimeline(partNode: Element): PartTimeline {
       }
       if (child.tagName === "backup") {
         global = Math.max(0, global - parseIntOr(textOf(child.querySelector("duration")), 0));
-        positioned = true;
         continue;
       }
       if (child.tagName === "forward") {
         global += parseIntOr(textOf(child.querySelector("duration")), 0);
-        positioned = true;
         continue;
       }
       if (child.tagName !== "note" || child.querySelector("grace") != null) {
@@ -340,11 +360,11 @@ function readPartTimeline(partNode: Element): PartTimeline {
       const chord = child.querySelector("chord") != null;
       let startDivs = global;
       if (!chord) {
-        if (!positioned && voice !== currentVoice && !voiceEnd.has(voice)) {
-          global = 0;
+        if (voice !== currentVoice) {
+          const resumed = voiceEnd.get(voice);
+          global = resumed == null ? 0 : resumed;
         }
         currentVoice = voice;
-        positioned = false;
         startDivs = global;
         lastChordStart = startDivs;
         global += durationDivs;
@@ -408,7 +428,14 @@ function readPartTimeline(partNode: Element): PartTimeline {
 
     const nominal = beats * (4 / beatType);
     const content = voiceEnd.size ? Math.max(...voiceEnd.values()) / divisions : 0;
-    const length = content > 0 ? content : nominal;
+    // A short first measure is a pickup. A short later measure is a missing
+    // rest, not a shorter bar: shrinking it would slide every later onset.
+    const length =
+      content > nominal + 1e-6
+        ? content
+        : index === 0 && content > 1e-6 && content + 1e-6 < nominal
+          ? content
+          : nominal;
     measures.push({
       displayNumber: measureNumber,
       displayLabel: measureNode.getAttribute("number")?.trim() || String(measureNumber),
@@ -435,6 +462,53 @@ function readPartTimeline(partNode: Element): PartTimeline {
     voiceDurations,
     rests,
   };
+}
+
+function alignToCanonicalMeasures(
+  timeline: PartTimeline,
+  localMeasureStarts: Map<string, Map<number, number>>,
+  parts: RecognizedPart[],
+  notes: NoteEvent[],
+  rests: RestFact[]
+) {
+  timeline.measures.sort((left, right) => left.displayNumber - right.displayNumber);
+  let cursor = 0;
+  timeline.measures.forEach((measure, index) => {
+    measure.internalIndex = index;
+    measure.startBeat = cursor;
+    measure.endBeat = cursor + measure.beatsInMeasure;
+    cursor += measure.beatsInMeasure;
+  });
+  const repeatByNumber = new Map(timeline.repeats.map((repeat) => [repeat.number, repeat]));
+  timeline.repeats = timeline.measures.map(
+    (measure) =>
+      repeatByNumber.get(measure.displayNumber) ?? {
+        number: measure.displayNumber,
+        repeatForward: false,
+        repeatBackward: false,
+        repeatTimes: 2,
+        ending: null,
+      }
+  );
+  const canonicalStart = new Map(timeline.measures.map((measure) => [measure.displayNumber, measure]));
+  const sourceOf = new Map(parts.map((part) => [part.id, part.sourcePartId]));
+  const place = (sourcePartId: string, measureNumber: number, startBeat: number) => {
+    const local = localMeasureStarts.get(sourcePartId)?.get(measureNumber);
+    const canonical = canonicalStart.get(measureNumber);
+    if (local == null || !canonical) {
+      return { startBeat, measureIndex: canonical?.internalIndex ?? 0 };
+    }
+    return { startBeat: canonical.startBeat + (startBeat - local), measureIndex: canonical.internalIndex };
+  };
+  for (const note of notes) {
+    const placed = place(sourceOf.get(note.partId) ?? note.partId, note.measureNumber, note.startBeat);
+    note.startBeat = placed.startBeat;
+  }
+  for (const rest of rests) {
+    const placed = place(rest.partId, rest.measureNumber, rest.startBeat);
+    rest.startBeat = placed.startBeat;
+    rest.measureIndex = placed.measureIndex;
+  }
 }
 
 function mergeTiedNotes(notes: RawNote[]): RawNote[] {
