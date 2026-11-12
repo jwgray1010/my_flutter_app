@@ -143,7 +143,7 @@ npm run test:score-report
 
 `test:score-recognition` scores the development and regression sets. `test:score-regression` scores the regression set only. `test:score-report` also scores the held-out set and writes `reports/recognition-report.md`. Held-out scores are for a final check, not for tuning.
 
-Synthetic fixtures cover unison, SA, SSA, SSAA, SAB, SATB, TB, TTBB, piano, solos, ties, cue notes, clef octave changes, key and meter changes, pickups, and repeats. When Python music21 is installed, the runner also scores four public-domain Bach chorales from the local music21 corpus. Those encodings are not copied into this repository. A chorale is scored only after music21 and a separate MusicXML walk agree.
+Synthetic fixtures cover unison, 2-part, SA, SSA, SSAA, SAB, SATB, TB, TTBB, director locks, printed ensemble text, piano introductions, solos, descants, shared staves, chromatic accidentals, key and meter changes, pickups, repeats, and D.S./coda navigation. Unlabeled voices stay unassigned until a director lock, printed ensemble text, or part labels identify them. Pitch order is not a choir assignment. When Python music21 is installed, the runner also scores four public-domain Bach chorales from the local music21 corpus. Those encodings are not copied into this repository. A chorale is scored only after music21 and a separate MusicXML walk agree.
 
 Printed-page checks render a few synthetic scores and send the image through Audiveris:
 
@@ -152,6 +152,10 @@ npx tsx scripts/score-recognition/run.ts --sets development,regression --omr --r
 ```
 
 OMR differences are reported on their own. They are not counted as MusicXML fixture passes.
+
+## Audio
+
+Sung lines and the piano part are played with recorded grand-piano notes from `public/samples/piano/`, not a synthesized waveform. These are the Salamander Grand Piano samples, recordings of a Yamaha C5 by Alexander Holm (https://archive.org/details/SalamanderGrandPianoV3), used under Creative Commons Attribution 3.0.
 
 ## Important prototype constraints
 

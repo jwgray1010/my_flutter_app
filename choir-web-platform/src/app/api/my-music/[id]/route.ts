@@ -6,11 +6,14 @@ import {
   updateSavedScoreContent,
   updateLastTempoPercent,
 } from "@/lib/server/my-music-db";
+import { randomUUID } from "node:crypto";
 import {
   applyManualCorrections,
   normalizeManualCorrections,
   upsertMeasurePartEdit,
 } from "@/lib/score-corrections";
+import { parseScoreSetup, type ChoirVoicingId } from "@/lib/score-model";
+import { applyDirectorVoicing } from "@/lib/unified-pipeline";
 import type { AssignablePartId, MeasurePartEditEvent } from "@/lib/score-types";
 
 export const runtime = "nodejs";
@@ -65,7 +68,50 @@ export async function PATCH(
         partId: string;
         measureInternalIndex: number;
         events: MeasurePartEditEvent[];
+      }
+    | {
+        action: "lockVoicing";
+        voicing: ChoirVoicingId;
+        scope: "SYSTEM" | "LAYOUT_REGION" | "REST_OF_SCORE";
+        targetId?: string | null;
       };
+
+  if (body.action === "lockVoicing") {
+    const voicing = parseScoreSetup({ choirVoicing: body.voicing }).choirVoicing;
+    if (voicing === "AUTO") {
+      return NextResponse.json({ message: "Choose a choir voicing." }, { status: 400 });
+    }
+    const parsedScore = structuredClone(existing.parsedScore);
+    if (body.scope === "REST_OF_SCORE" || !parsedScore.scoreModel) {
+      applyDirectorVoicing(parsedScore, voicing);
+    }
+    if (parsedScore.scoreModel && body.scope !== "REST_OF_SCORE") {
+      parsedScore.scoreModel.directorCorrections.push({
+        id: randomUUID(),
+        scope: body.scope,
+        targetId: body.targetId ?? null,
+        voicing,
+        partId: null,
+        canonicalPart: null,
+        createdAt: new Date().toISOString(),
+      });
+      const region =
+        parsedScore.scoreModel.layoutRegions.find((entry) => entry.id === body.targetId) ??
+        parsedScore.scoreModel.layoutRegions[0];
+      if (region) {
+        region.directorVoicing = voicing;
+      }
+    }
+    updateSavedScoreContent(id, {
+      parsedScore: { ...parsedScore, title: existing.title },
+      directorConfirmedPartAssignments: Object.fromEntries(
+        parsedScore.parts.map((part) => [part.id, part.canonicalPart])
+      ),
+      manualCorrections: existing.manualCorrections,
+    });
+    const updated = getSavedScoreById(id);
+    return NextResponse.json({ item: updated });
+  }
 
   if (body.action === "rename") {
     const title = body.title?.trim();

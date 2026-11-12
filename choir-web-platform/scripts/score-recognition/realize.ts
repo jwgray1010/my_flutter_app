@@ -82,8 +82,10 @@ function buildExpected(spec: FixtureSpec): ExpectedScore {
   }
 
   const keyRegions = [{ startMeasure: 1, ...spec.key }];
-  for (const change of spec.keyChanges ?? []) {
-    keyRegions.push({ startMeasure: change.measure, ...change.key });
+  if (spec.keyChangeScope !== "first-part") {
+    for (const change of spec.keyChanges ?? []) {
+      keyRegions.push({ startMeasure: change.measure, ...change.key });
+    }
   }
 
   const events: ExpectedEvent[] = [];
@@ -123,7 +125,7 @@ function buildExpected(spec: FixtureSpec): ExpectedScore {
     timeSignatures,
     measureBeats,
     keyRegions,
-    performanceRoute: routeFromSpec(spec),
+    performanceRoute: spec.routeOverride ?? routeFromSpec(spec),
     entrances,
     events,
   };
@@ -273,11 +275,14 @@ function buildMusicXml(spec: FixtureSpec): string {
         `    <score-part id="${escapeXml(part.id)}"><part-name>${escapeXml(part.name)}</part-name></score-part>`
     )
     .join("\n");
-  const parts = spec.parts.map((part) => renderPart(spec, part)).join("\n");
+  const parts = spec.parts.map((part, index) => renderPart(spec, part, index)).join("\n");
+  const credit = spec.credit
+    ? `  <credit><credit-words>${escapeXml(spec.credit)}</credit-words></credit>\n`
+    : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">
   <movement-title>${escapeXml(spec.title)}</movement-title>
-  <part-list>
+${credit}  <part-list>
 ${partList}
   </part-list>
 ${parts}
@@ -285,18 +290,24 @@ ${parts}
 `;
 }
 
-function renderPart(spec: FixtureSpec, part: PartSpec): string {
+function renderPart(spec: FixtureSpec, part: PartSpec, partIndex: number): string {
   const measures: string[] = [];
   for (let measure = 1; measure <= spec.measures; measure += 1) {
-    measures.push(renderMeasure(spec, part, measure));
+    measures.push(renderMeasure(spec, part, measure, partIndex));
   }
   return `  <part id="${escapeXml(part.id)}">\n${measures.join("\n")}\n  </part>`;
 }
 
-function renderMeasure(spec: FixtureSpec, part: PartSpec, measure: number): string {
+function renderMeasure(spec: FixtureSpec, part: PartSpec, measure: number, partIndex: number): string {
   const chunks: string[] = [];
   chunks.push(`    <measure number="${measure}">`);
-  const header = renderAttributes(spec, part, measure);
+  if (partIndex === 0) {
+    const marks = spec.navigation?.find((entry) => entry.measure === measure)?.marks ?? [];
+    if (marks.length) {
+      chunks.push(renderNavigation(marks));
+    }
+  }
+  const header = renderAttributes(spec, part, measure, partIndex);
   if (header) {
     chunks.push(header);
   }
@@ -313,7 +324,30 @@ function renderMeasure(spec: FixtureSpec, part: PartSpec, measure: number): stri
   return chunks.join("\n");
 }
 
-function renderAttributes(spec: FixtureSpec, part: PartSpec, measure: number): string | null {
+function renderNavigation(marks: Array<"segno" | "coda" | "to-coda" | "ds-al-coda" | "fine" | "dc-al-fine">): string {
+  return marks
+    .map((mark) => {
+      if (mark === "segno") {
+        return `      <direction><direction-type><segno/></direction-type></direction>`;
+      }
+      if (mark === "coda") {
+        return `      <direction><direction-type><coda/></direction-type></direction>`;
+      }
+      if (mark === "to-coda") {
+        return `      <direction><direction-type><words>To Coda</words></direction-type></direction>`;
+      }
+      if (mark === "ds-al-coda") {
+        return `      <direction><direction-type><words>D.S. al Coda</words></direction-type></direction>`;
+      }
+      if (mark === "dc-al-fine") {
+        return `      <direction><direction-type><words>D.C. al Fine</words></direction-type></direction>`;
+      }
+      return `      <direction><direction-type><words>Fine</words></direction-type></direction>`;
+    })
+    .join("\n");
+}
+
+function renderAttributes(spec: FixtureSpec, part: PartSpec, measure: number, partIndex: number): string | null {
   const lines: string[] = [];
   const time = timeAt(spec, measure);
   const previousTime = measure > 1 ? timeAt(spec, measure - 1) : null;
@@ -325,10 +359,8 @@ function renderAttributes(spec: FixtureSpec, part: PartSpec, measure: number): s
     previousTime.beats !== time.beats ||
     previousTime.beatType !== time.beatType;
   const keyChanged =
-    measure === 1 ||
-    !previousKey ||
-    previousKey.fifths !== key.fifths ||
-    previousKey.mode !== key.mode;
+    (measure === 1 || !previousKey || previousKey.fifths !== key.fifths || previousKey.mode !== key.mode) &&
+    (measure === 1 || spec.keyChangeScope !== "first-part" || partIndex === 0);
   if (measure !== 1 && !timeChanged && !keyChanged) {
     return null;
   }

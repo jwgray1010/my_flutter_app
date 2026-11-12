@@ -1,0 +1,5 @@
+Salamander Grand Piano samples
+Recordings of a Yamaha C5 grand piano by Alexander Holm.
+Source: https://archive.org/details/SalamanderGrandPianoV3
+License: Creative Commons Attribution 3.0 (CC-BY 3.0)
+These are the same recordings distributed with the Tone.js examples.

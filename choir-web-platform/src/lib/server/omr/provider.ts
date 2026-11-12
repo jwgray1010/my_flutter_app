@@ -3,6 +3,12 @@ import type { OMRDiagnostics } from "@/lib/score-types";
 export interface OMRProcessOptions {
   outputDir: string;
   pageNumbers?: number[];
+  /** Optional explicit Audiveris process timeout. */
+  timeoutMs?: number;
+  /** Original upload extension for timeout heuristics (e.g. "pdf"). */
+  sourceExtension?: string;
+  /** Original upload size for timeout heuristics. */
+  sourceFileSizeBytes?: number;
 }
 
 export interface OMRArtifacts {
