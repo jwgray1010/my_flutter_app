@@ -17,6 +17,7 @@ import {
   type StructuredWarning,
   type VoicingTraceEntry,
 } from "@/lib/score-model";
+import { enforcePartIdentity } from "@/lib/part-identity";
 import { applyPrintedStaffLabels, bindOcrLabelsToParts, finalizeStaffLabelTraces } from "@/lib/part-labels";
 import { inferChoirVoicing } from "@/lib/voicing";
 import {
@@ -201,6 +202,9 @@ function interpretUnlocked(input: InterpretInput): ParsedScore {
     closeSoloAfter(score, soloEnd);
   }
 
+  const identity = enforcePartIdentity(score, notation.facts, printed.traces);
+  warnings.push(...identity.warnings);
+
   if (!state.locked) {
     const summary = choirSummary(score);
     const summaryIsWeaker = summary === "Unknown" && state.value !== "Unknown";
@@ -327,15 +331,18 @@ function interpretUnlocked(input: InterpretInput): ParsedScore {
     firstMainChoirSystem: firstChoirSystem(systems, score),
     writtenMeasures,
     partActivityRegions: activityRegions(score),
-    layoutRegions: [
-      {
-        id: "layout-1",
-        startMeasure: writtenMeasures[0]?.displayNumber ?? 1,
-        endMeasure: writtenMeasures[writtenMeasures.length - 1]?.displayNumber ?? 1,
-        staffToParts: staffMap(score),
-        directorVoicing: null,
-      },
-    ],
+    layoutRegions: identity.layoutRegions.length
+      ? identity.layoutRegions
+      : [
+          {
+            id: "layout-1",
+            startMeasure: writtenMeasures[0]?.displayNumber ?? 1,
+            endMeasure: writtenMeasures[writtenMeasures.length - 1]?.displayNumber ?? 1,
+            staffToParts: staffMap(score),
+            silentPartIds: [],
+            directorVoicing: null,
+          },
+        ],
     divisiRegions: divisiRegions(notation.facts, score.parts, score.measures),
     keySignatureRegions: keys.regions,
     timeSignatureRegions: buildTimeRegions(score.measures),

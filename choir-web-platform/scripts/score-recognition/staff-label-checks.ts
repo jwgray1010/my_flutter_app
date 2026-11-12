@@ -6,6 +6,7 @@ import { normalizePrintedLabel } from "@/lib/part-labels";
 import { detectStaffBands, recognizeStaffLabels, tesseractAvailable } from "@/lib/server/staff-label-ocr";
 import type { CanonicalPartId } from "@/lib/score-types";
 import { interpretUnifiedScore } from "@/lib/unified-pipeline";
+import { runPartIdentityChecks } from "./part-identity-checks";
 
 export async function runStaffLabelChecks() {
   normalizationTable();
@@ -18,6 +19,7 @@ export async function runStaffLabelChecks() {
   abbreviationsAndNumberedParts();
   repeatedSystemLabelsStayOnePart();
   directorLockDoesNotEraseAPrintedLabel();
+  runPartIdentityChecks();
   await ocrReadsPrintedStaffNames();
   console.log("Staff-label checks passed.");
 }

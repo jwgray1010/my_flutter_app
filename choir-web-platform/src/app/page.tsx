@@ -2269,7 +2269,7 @@ function RecognitionSummary(props: { score: ParsedScore }) {
   const key = model.keySignatureRegions[0]?.label ?? "Unknown";
   const meter = model.timeSignatureRegions.map((region) => region.timeSignature).join(" → ") || "Unknown";
   const needsReview = model.recognitionWarnings.filter((warning) =>
-    ["KEY_FLICKER", "KEY_DISAGREEMENT", "KEY_SINGLE_STAFF", "RHYTHM_DURATION", "PART_COUNT", "NAVIGATION", "LABEL_CONFLICT", "LABEL_LOST", "LABEL_SHARED", "PIANO_BRACE", "BARITONE"].includes(
+    ["KEY_FLICKER", "KEY_DISAGREEMENT", "KEY_SINGLE_STAFF", "RHYTHM_DURATION", "PART_COUNT", "NAVIGATION", "LABEL_CONFLICT", "LABEL_LOST", "LABEL_SHARED", "PIANO_BRACE", "BARITONE", "IDENTITY_SHIFT", "IDENTITY_REVIEW"].includes(
       warning.code
     )
   );
@@ -2287,16 +2287,19 @@ function RecognitionSummary(props: { score: ParsedScore }) {
       <p className="mt-1">
         Staff mapping:{" "}
         {model.layoutRegions
-          .flatMap((region) =>
-            region.staffToParts.map((staff) => {
-              const names = staff.partIds.map((id) => {
-                const logical = model.logicalParts.find((part) => part.id === id);
-                const extra = model.extraPlayableParts.find((part) => part.id === id);
-                return logical?.label ?? extra?.label ?? id;
-              });
-              return names.join(" + ");
-            })
-          )
+          .map((region) => {
+            const nameOf = (id: string) => {
+              const logical = model.logicalParts.find((part) => part.id === id);
+              const extra = model.extraPlayableParts.find((part) => part.id === id);
+              return logical?.label ?? extra?.label ?? id;
+            };
+            const staves = region.staffToParts
+              .map((staff) => staff.partIds.map(nameOf).join(" + "))
+              .join(" / ");
+            const silent = (region.silentPartIds ?? []).map(nameOf);
+            const resting = silent.length ? ` (silent ${silent.join(", ")})` : "";
+            return `m.${region.startMeasure}–${region.endMeasure}: ${staves || "—"}${resting}`;
+          })
           .join(" | ") || "None"}
       </p>
       <p className="mt-1">Parts: {model.logicalParts.map((part) => part.label).join(", ") || "None"}</p>

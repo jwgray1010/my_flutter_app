@@ -246,6 +246,8 @@ export interface LayoutRegion {
   startMeasure: number;
   endMeasure: number;
   staffToParts: { staffId: string; partIds: string[] }[];
+  /** Established choir parts with no notes in this system. The part is silent, not deleted. */
+  silentPartIds?: string[];
   directorVoicing: string | null;
 }
 

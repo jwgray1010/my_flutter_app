@@ -143,7 +143,7 @@ export function applyPrintedStaffLabels(score: ParsedScore, facts: StructuralFac
 
   for (const [sourcePartId, members] of bySource) {
     const texts = facts.staffTexts.filter((text) => text.partId === sourcePartId);
-    const chosen = distinctLabels(chooseLabels(texts));
+    const chosen = earliestLabelSet(distinctLabels(chooseLabels(texts)));
     if (!chosen.length) {
       continue;
     }
@@ -219,6 +219,15 @@ export function finalizeStaffLabelTraces(
   });
 }
 
+function earliestLabelSet(items: ReturnType<typeof labelsFrom>) {
+  if (items.length <= 1) {
+    return items;
+  }
+  const first = Math.min(...items.map((item) => item.text.measureNumber));
+  const opening = items.filter((item) => item.text.measureNumber === first);
+  return opening.length ? opening : items;
+}
+
 function distinctLabels(items: ReturnType<typeof labelsFrom>) {
   const seen = new Set<string>();
   const kept: ReturnType<typeof labelsFrom> = [];
@@ -236,7 +245,7 @@ function distinctLabels(items: ReturnType<typeof labelsFrom>) {
 function chooseLabels(texts: StaffTextFact[]) {
   const names = texts.filter((text) => text.source === "part-name" || text.source === "part-abbreviation");
   const words = texts.filter((text) => text.source === "words" || text.source === "ocr");
-  const positioned = words.filter(isLabelPosition);
+  const positioned = words.filter(isStaffLabelPosition);
   const letterContext =
     countSingleLetters(positioned) >= 2 || countSingleLetters(names) >= 2;
   const nameLabels = labelsFrom(names, true);
@@ -578,7 +587,7 @@ function membersForStaff(members: RecognizedPart[], staff: number | null) {
   return matched.length ? matched : sorted;
 }
 
-function isLabelPosition(text: StaffTextFact) {
+export function isStaffLabelPosition(text: StaffTextFact) {
   if (text.source === "ocr") {
     if (text.pageWidth && text.defaultX != null) {
       return text.defaultX <= text.pageWidth * 0.32;
