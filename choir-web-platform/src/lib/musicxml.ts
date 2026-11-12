@@ -3,8 +3,10 @@ import type { ExtraPartKind } from "@/lib/score-model";
 import type {
   ClefFact,
   DirectionFact,
+  PartGroupFact,
   PrintFact,
   StaffKeyFact,
+  StaffTextFact,
   StructuralFacts,
   TempoFact,
   VoiceDurationFact,
@@ -57,8 +59,10 @@ export function readMusicXmlNotation(xmlText: string, sourceType: "musicxml" | "
 
   const scoreTitle = readTitle(root);
   const credits = readCredits(root);
-  const partList = elementChildrenByTag(root.querySelector("part-list"), "score-part");
+  const partListNode = root.querySelector("part-list");
+  const partList = elementChildrenByTag(partListNode, "score-part");
   const partNameById = new Map<string, string>();
+  const abbreviationById = new Map<string, string>();
   for (const item of partList) {
     const id = item.getAttribute("id")?.trim() ?? "";
     if (!id) {
@@ -66,7 +70,9 @@ export function readMusicXmlNotation(xmlText: string, sourceType: "musicxml" | "
     }
     const partName = textOf(item.querySelector("part-name")) || "Part";
     partNameById.set(id, partName || "Part");
+    abbreviationById.set(id, textOf(item.querySelector("part-abbreviation")) ?? "");
   }
+  const partGroups = readPartGroups(partListNode);
 
   const partNodes = elementChildrenByTag(root, "part");
   if (!partNodes.length) {
@@ -85,10 +91,14 @@ export function readMusicXmlNotation(xmlText: string, sourceType: "musicxml" | "
   const tempos: TempoFact[] = [];
   const voiceDurations: VoiceDurationFact[] = [];
   const rests: RestFact[] = [];
+  const staffTexts: StaffTextFact[] = [];
 
   partNodes.forEach((partNode, idx) => {
     const sourcePartId = partNode.getAttribute("id") ?? `P${idx + 1}`;
     const sourceName = partNameById.get(sourcePartId) ?? `Part ${idx + 1}`;
+    staffTexts.push(
+      ...readStaffTexts(partNode, sourcePartId, sourceName, abbreviationById.get(sourcePartId) ?? "")
+    );
     const partTimeline = idx === 0 ? timeline : readPartTimeline(partNode);
     const staves = estimatePartStaves(partNode);
     const piano = partLooksLikePiano(sourceName, staves, readClefSigns(partNode));
@@ -141,6 +151,8 @@ export function readMusicXmlNotation(xmlText: string, sourceType: "musicxml" | "
       credits,
       partNames: [...partNameById.entries()].map(([id, name]) => ({ id, name })),
       directions,
+      staffTexts,
+      partGroups,
       staffKeys,
       prints,
       clefs,
@@ -795,6 +807,112 @@ function estimatePartStaves(partNode: Element) {
   return Math.max(1, staves);
 }
 
+function readPartGroups(partList: Element | null): PartGroupFact[] {
+  if (!partList) {
+    return [];
+  }
+  const open = new Map<string, { symbol: string; partIds: string[] }>();
+  const groups: PartGroupFact[] = [];
+  for (const child of Array.from(partList.children)) {
+    if (child.tagName === "part-group") {
+      const number = child.getAttribute("number") ?? "1";
+      if (child.getAttribute("type") === "start") {
+        open.set(number, {
+          symbol: (textOf(child.querySelector("group-symbol")) ?? "none").toLowerCase(),
+          partIds: [],
+        });
+      } else if (child.getAttribute("type") === "stop") {
+        const group = open.get(number);
+        if (group && group.partIds.length >= 2) {
+          groups.push({ symbol: group.symbol, partIds: [...group.partIds] });
+        }
+        open.delete(number);
+      }
+      continue;
+    }
+    if (child.tagName !== "score-part") {
+      continue;
+    }
+    const id = child.getAttribute("id")?.trim() ?? "";
+    if (!id) {
+      continue;
+    }
+    for (const group of open.values()) {
+      group.partIds.push(id);
+    }
+  }
+  return groups;
+}
+
+function readStaffTexts(partNode: Element, partId: string, partName: string, abbreviation: string): StaffTextFact[] {
+  const texts: StaffTextFact[] = [];
+  if (partName.trim()) {
+    texts.push(staffText(partId, 1, 0, null, partName.trim(), null, null, true, "part-name"));
+  }
+  if (abbreviation.trim() && abbreviation.trim() !== partName.trim()) {
+    texts.push(staffText(partId, 1, 0, null, abbreviation.trim(), null, null, true, "part-abbreviation"));
+  }
+  elementChildrenByTag(partNode, "measure").forEach((measureNode, index) => {
+    const measureNumber = parseMeasureToken(measureNode.getAttribute("number"), index + 1);
+    const print = elementChildrenByTag(measureNode, "print")[0];
+    const systemStart =
+      index === 0 || print?.getAttribute("new-system") === "yes" || print?.getAttribute("new-page") === "yes";
+    for (const direction of elementChildrenByTag(measureNode, "direction")) {
+      const staff = parseIntOr(textOf(elementChildrenByTag(direction, "staff")[0]), Number.NaN);
+      for (const word of Array.from(direction.querySelectorAll("words"))) {
+        const text = word.textContent?.trim() ?? "";
+        if (!text) {
+          continue;
+        }
+        texts.push(
+          staffText(
+            partId,
+            measureNumber,
+            index,
+            Number.isFinite(staff) ? staff : null,
+            text,
+            floatAttr(word, "default-x") ?? floatAttr(word, "relative-x"),
+            floatAttr(word, "default-y") ?? floatAttr(word, "relative-y"),
+            systemStart,
+            "words"
+          )
+        );
+      }
+    }
+  });
+  return texts;
+}
+
+function staffText(
+  partId: string,
+  measureNumber: number,
+  measureIndex: number,
+  staff: number | null,
+  text: string,
+  defaultX: number | null,
+  defaultY: number | null,
+  systemStart: boolean,
+  source: StaffTextFact["source"]
+): StaffTextFact {
+  return {
+    partId,
+    measureNumber,
+    measureIndex,
+    staff,
+    text,
+    defaultX,
+    defaultY,
+    pageWidth: null,
+    systemStart,
+    source,
+  };
+}
+
+function floatAttr(element: Element, name: string): number | null {
+  const value = Number(element.getAttribute(name));
+  return Number.isFinite(value) ? value : null;
+}
+
 function detectCanonicalPart(sourceName: string): {
   canonicalPart: CanonicalPartId;
   confident: boolean;
@@ -828,10 +946,10 @@ function detectCanonicalPart(sourceName: string): {
 }
 
 function isRole(role: string, word: string, abbreviations: string[]): boolean {
-  if (role === word || role.includes(word)) {
+  if (role === word || abbreviations.includes(role)) {
     return true;
   }
-  return abbreviations.includes(role);
+  return role.split(/[^a-z0-9]+/).filter(Boolean).includes(word);
 }
 
 function extraKindFromName(normalized: string): ExtraPartKind | null {

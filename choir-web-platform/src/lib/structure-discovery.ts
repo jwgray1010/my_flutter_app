@@ -57,10 +57,31 @@ export interface VoiceDurationFact {
   nominal: number;
 }
 
+export interface StaffTextFact {
+  partId: string;
+  measureNumber: number;
+  measureIndex: number;
+  staff: number | null;
+  text: string;
+  defaultX: number | null;
+  defaultY: number | null;
+  /** Image width for OCR tokens. MusicXML words leave this empty. */
+  pageWidth: number | null;
+  systemStart: boolean;
+  source: "part-name" | "part-abbreviation" | "words" | "ocr";
+}
+
+export interface PartGroupFact {
+  symbol: string;
+  partIds: string[];
+}
+
 export interface StructuralFacts {
   credits: string[];
   partNames: { id: string; name: string }[];
   directions: DirectionFact[];
+  staffTexts: StaffTextFact[];
+  partGroups: PartGroupFact[];
   staffKeys: StaffKeyFact[];
   prints: PrintFact[];
   clefs: ClefFact[];

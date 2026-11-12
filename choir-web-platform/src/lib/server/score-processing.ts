@@ -6,6 +6,8 @@ import { buildOcrService } from "@/lib/server/omr";
 import { analyzeImageQuality } from "@/lib/server/quality";
 import { preparePageForOmr, rasterizePdfPages } from "@/lib/normalize-pages";
 import { DEFAULT_SCORE_SETUP, parseScoreSetup, type ScoreSetup, type SourceUploadType } from "@/lib/score-model";
+import { recognizeStaffLabels } from "@/lib/server/staff-label-ocr";
+import type { StaffTextFact } from "@/lib/structure-discovery";
 import { interpretUnifiedScore } from "@/lib/unified-pipeline";
 
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/jpg", "image/webp"]);
@@ -126,12 +128,24 @@ export async function processFileToParsedScore(input: ProcessFileInput): Promise
     sourceType = "omr";
   }
 
+  const supplementalLabels: StaffTextFact[] = [];
+  if (sourceType === "omr") {
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      const imagePath = path.join(input.audiverisOutputDir, "prepared-pages", `page-${pageIndex + 1}.png`);
+      try {
+        supplementalLabels.push(...(await recognizeStaffLabels(imagePath, pageIndex + 1)));
+      } catch {
+        warnings.push("Staff-label OCR could not read this page. Part names already in the MusicXML were kept.");
+      }
+    }
+  }
   const parsedScore = interpretUnifiedScore({
     xml: musicXml,
     sourceType,
     sourceUploadType,
     pageCount,
     setup,
+    supplementalLabels,
   });
   const modelWarnings = parsedScore.scoreModel?.recognitionWarnings.map((warning) => warning.message) ?? [];
   return {

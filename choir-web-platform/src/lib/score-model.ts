@@ -363,6 +363,17 @@ export interface PlaybackEvent {
   unisonGroupId: string | null;
 }
 
+export interface StaffLabelTrace {
+  rawText: string;
+  normalized: string;
+  partId: string;
+  staffId: string;
+  logicalPartId: string;
+  playbackChannelId: string | null;
+  status: "PASS" | "FAIL";
+  failedStage: string | null;
+}
+
 export interface PlaybackModel {
   channels: PlaybackChannel[];
   route: number[];
@@ -394,10 +405,13 @@ export interface ScoreModel {
   extraPlayableParts: LogicalPartModel[];
   accompaniment: {
     kind: "NONE" | "PIANO" | "OTHER";
+    /** Printed instrument name when it is more specific than kind, such as Organ. */
+    label: string;
     partIds: string[];
     rightHandStaff: string | null;
     leftHandStaff: string | null;
   };
+  staffLabelTrace: StaffLabelTrace[];
   mainChoirGroup: StaffGroup | null;
   firstMainChoirSystem: number | null;
   writtenMeasures: WrittenMeasureModel[];

@@ -8,6 +8,7 @@ import { guardLockedVoicing, interpretUnifiedScore } from "@/lib/unified-pipelin
 import { assignChoirRegisters } from "@/lib/voicing";
 import { SYNTHETIC_FIXTURES } from "./catalog";
 import { realizeFixture } from "./realize";
+import { runStaffLabelChecks } from "./staff-label-checks";
 
 export async function runArchitectureChecks() {
   crossUploadAgrees();
@@ -16,6 +17,7 @@ export async function runArchitectureChecks() {
   legacyProcessorIsRejected();
   dalCapoStopsAtFine();
   await pdfBecomesOrderedPages();
+  await runStaffLabelChecks();
   console.log("Architecture checks passed.");
 }
 

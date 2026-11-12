@@ -2,6 +2,7 @@ import { JSDOM } from "jsdom";
 import { populatePartRanges, readMusicXmlNotation, type RestFact } from "@/lib/musicxml";
 import { buildPlaybackModel, type RouteMeasure } from "@/lib/playback-model";
 import type { CanonicalPartId, ParsedScore, RecognizedPart } from "@/lib/score-types";
+import type { StaffTextFact } from "@/lib/structure-discovery";
 import {
   PIPELINE_VERSION,
   DEFAULT_SCORE_SETUP,
@@ -16,6 +17,7 @@ import {
   type StructuredWarning,
   type VoicingTraceEntry,
 } from "@/lib/score-model";
+import { applyPrintedStaffLabels, bindOcrLabelsToParts, finalizeStaffLabelTraces } from "@/lib/part-labels";
 import { inferChoirVoicing } from "@/lib/voicing";
 import {
   buildClefRegions,
@@ -42,6 +44,8 @@ export interface InterpretInput {
   sourceUploadType: SourceUploadType;
   pageCount: number;
   setup?: ScoreSetup | null;
+  /** OCR tokens with staff indexes and empty part ids. Bound before label attachment. */
+  supplementalLabels?: StaffTextFact[];
 }
 
 interface VoicingState {
@@ -104,6 +108,11 @@ function interpretUnlocked(input: InterpretInput): ParsedScore {
   const score = notation.score;
   const state: VoicingState = { value: "Unknown", locked: false, trace: [] };
   const warnings: StructuredWarning[] = [];
+  if (input.supplementalLabels?.length) {
+    notation.facts.staffTexts.push(...bindOcrLabelsToParts(score, input.supplementalLabels));
+  }
+  const printed = applyPrintedStaffLabels(score, notation.facts);
+  warnings.push(...printed.warnings);
 
   const ensemble = discoverEnsembleText(notation.facts);
   if (ensemble.voicing && ensemble.voicing !== "CUSTOM") {
@@ -258,6 +267,47 @@ function interpretUnlocked(input: InterpretInput): ParsedScore {
       system: null,
     });
   }
+  if (state.locked && directorVoicing) {
+    const template = rolesForVoicing(directorVoicing) ?? [];
+    const printedRoles = printed.traces
+      .map((trace) => trace.normalized.split("+")[0]?.replace(/_\d$/, "") ?? "")
+      .filter((role) => role === "SOPRANO" || role === "ALTO" || role === "TENOR" || role === "BASS");
+    const rest = [...template];
+    const conflict = printedRoles.some((role) => {
+      const index = rest.indexOf(role);
+      if (index < 0) {
+        return true;
+      }
+      rest.splice(index, 1);
+      return false;
+    });
+    if (conflict) {
+      warnings.push({
+        code: "LABEL_CONFLICT",
+        message: "Printed staff labels do not match the confirmed voicing. The printed labels were kept.",
+        measure: null,
+        page: null,
+        system: null,
+      });
+    }
+  }
+  const staffLabelTrace = finalizeStaffLabelTraces(
+    score,
+    printed.traces,
+    playback.playback.channels,
+    state.trace.map((entry) => entry.functionName)
+  );
+  warnings.push(
+    ...staffLabelTrace
+      .filter((trace) => trace.status === "FAIL")
+      .map((trace) => ({
+        code: "LABEL_LOST",
+        message: `Printed “${trace.rawText}” did not survive ${trace.failedStage ?? "part assignment"}.`,
+        measure: null,
+        page: null,
+        system: null,
+      }))
+  );
 
   const scoreModel: ScoreModel = {
     pipelineVersion: PIPELINE_VERSION,
@@ -272,6 +322,7 @@ function interpretUnlocked(input: InterpretInput): ParsedScore {
     logicalParts: logical.choir,
     extraPlayableParts: logical.extra,
     accompaniment,
+    staffLabelTrace,
     mainChoirGroup: choirGroup,
     firstMainChoirSystem: firstChoirSystem(systems, score),
     writtenMeasures,
@@ -337,6 +388,12 @@ export function applyDirectorVoicing(score: ParsedScore, voicing: ChoirVoicingId
   const playback = buildPlaybackModel(score, score.scoreModel, repeatsFromNavigation(score));
   score.scoreModel.playback = playback.playback;
   score.performanceRoute = playback.playback.route;
+  score.scoreModel.staffLabelTrace = finalizeStaffLabelTraces(
+    score,
+    score.scoreModel.staffLabelTrace ?? [],
+    playback.playback.channels,
+    state.trace.map((entry) => entry.functionName)
+  );
   return score;
 }
 
@@ -363,20 +420,27 @@ function applyRoleTemplate(score: ParsedScore, voicing: ChoirVoicingId, overwrit
   if (!overwriteUnknownOnly && confident.length === choir.length) {
     return true;
   }
-  choir.forEach((part, index) => {
-    const role = roles[index];
-    if (!role) {
-      return;
+  const remaining = [...roles];
+  for (const part of confident) {
+    const index = remaining.indexOf(part.canonicalPart);
+    if (index >= 0) {
+      remaining.splice(index, 1);
+    }
+  }
+  for (const part of choir) {
+    if (part.canonicalPart !== "UNKNOWN" && !part.needsConfirmation) {
+      continue;
     }
     if (!overwriteUnknownOnly && part.canonicalPart !== "UNKNOWN") {
-      return;
+      continue;
     }
-    if (overwriteUnknownOnly && part.canonicalPart !== "UNKNOWN" && !part.needsConfirmation) {
-      return;
+    const role = remaining.shift();
+    if (!role) {
+      break;
     }
     part.canonicalPart = role;
     part.needsConfirmation = !overwriteUnknownOnly;
-  });
+  }
   return true;
 }
 
@@ -530,14 +594,17 @@ function accompanimentOf(score: ParsedScore, choice: ScoreSetup["accompaniment"]
   const piano = score.parts.filter((part) => part.canonicalPart === "PIANO");
   const kind = choice === "NONE" ? "NONE" : choice === "OTHER" ? "OTHER" : piano.length ? "PIANO" : "NONE";
   const right = piano[0] ? `${piano[0].sourcePartId}:s1` : null;
-  const left = piano[0] && piano[0].staves > 1 ? `${piano[0].sourcePartId}:s2` : null;
+  const left = piano[0] && piano[0].staves > 1 ? `${piano[0].sourcePartId}:s2` : piano[1] ? `${piano[1].sourcePartId}:s1` : null;
+  const printedName = piano.map((part) => part.sourceName).find((name) => /organ|keyboard/i.test(name));
   return {
     kind: kind as "NONE" | "PIANO" | "OTHER",
+    label: kind === "NONE" ? "None" : printedName ?? "Piano",
     partIds: piano.map((part) => part.id),
     rightHandStaff: right,
     leftHandStaff: left,
   };
 }
+
 
 function activityRegions(score: ParsedScore) {
   const regions: ScoreModel["partActivityRegions"] = [];

@@ -2269,16 +2269,36 @@ function RecognitionSummary(props: { score: ParsedScore }) {
   const key = model.keySignatureRegions[0]?.label ?? "Unknown";
   const meter = model.timeSignatureRegions.map((region) => region.timeSignature).join(" → ") || "Unknown";
   const needsReview = model.recognitionWarnings.filter((warning) =>
-    ["KEY_FLICKER", "KEY_DISAGREEMENT", "KEY_SINGLE_STAFF", "RHYTHM_DURATION", "PART_COUNT", "NAVIGATION"].includes(
+    ["KEY_FLICKER", "KEY_DISAGREEMENT", "KEY_SINGLE_STAFF", "RHYTHM_DURATION", "PART_COUNT", "NAVIGATION", "LABEL_CONFLICT", "LABEL_LOST", "LABEL_SHARED", "PIANO_BRACE", "BARITONE"].includes(
       warning.code
     )
   );
   return (
     <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-900/40 p-4 text-sm text-zinc-200">
       <p>Voicing: {model.mainChoirVoicing}{model.voicingLocked ? " (locked)" : ""}</p>
-      <p className="mt-1">Accompaniment: {model.accompaniment.kind === "NONE" ? "A cappella / none" : model.accompaniment.kind === "PIANO" ? "Piano" : "Other"}</p>
+      <p className="mt-1">
+        Accompaniment:{" "}
+        {model.accompaniment.kind === "NONE"
+          ? "A cappella / none"
+          : model.accompaniment.label || (model.accompaniment.kind === "PIANO" ? "Piano" : "Other")}
+      </p>
       <p className="mt-1">Key: {key}</p>
       <p className="mt-1">Meter: {meter}</p>
+      <p className="mt-1">
+        Staff mapping:{" "}
+        {model.layoutRegions
+          .flatMap((region) =>
+            region.staffToParts.map((staff) => {
+              const names = staff.partIds.map((id) => {
+                const logical = model.logicalParts.find((part) => part.id === id);
+                const extra = model.extraPlayableParts.find((part) => part.id === id);
+                return logical?.label ?? extra?.label ?? id;
+              });
+              return names.join(" + ");
+            })
+          )
+          .join(" | ") || "None"}
+      </p>
       <p className="mt-1">Parts: {model.logicalParts.map((part) => part.label).join(", ") || "None"}</p>
       <p className="mt-1">
         Entrances:{" "}
