@@ -272,15 +272,18 @@ function buildChannels(
       entersAtMeasure: entranceOf(score, part.id),
     });
   }
-  for (const partId of model.accompaniment.partIds) {
-    const part = score.parts.find((candidate) => candidate.id === partId);
+  if (model.accompaniment.partIds.length) {
+    const entrances = model.accompaniment.partIds
+      .map((partId) => entranceOf(score, partId))
+      .filter((measure): measure is number => measure != null);
+    const printed = model.accompaniment.label;
     channels.push({
-      id: partId,
-      label: part?.sourceName || "Piano",
+      id: model.accompaniment.partIds[0],
+      label: printed && printed !== "None" ? printed : "Piano",
       group: "ACCOMPANIMENT",
-      partIds: [partId],
+      partIds: [...model.accompaniment.partIds],
       canonicalPart: "PIANO",
-      entersAtMeasure: entranceOf(score, partId),
+      entersAtMeasure: entrances.length ? Math.min(...entrances) : null,
     });
   }
   return channels;

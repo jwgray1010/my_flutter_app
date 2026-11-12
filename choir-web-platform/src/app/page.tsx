@@ -175,11 +175,22 @@ export default function Home() {
 
   useEffect(() => {
     if (selectedChannelIds) {
-      playerRef.current?.setEnabledPartIds(selectedChannelIds);
+      const channels = score?.scoreModel?.playback.channels ?? [];
+      const partIds = new Set<string>();
+      for (const channel of channels) {
+        if (!selectedChannelIds.has(channel.id)) {
+          continue;
+        }
+        partIds.add(channel.id);
+        for (const partId of channel.partIds) {
+          partIds.add(partId);
+        }
+      }
+      playerRef.current?.setEnabledPartIds(partIds);
       return;
     }
     playerRef.current?.setEnabledCanonicalParts(selectedParts);
-  }, [selectedChannelIds, selectedParts]);
+  }, [score, selectedChannelIds, selectedParts]);
 
   useEffect(() => {
     playerRef.current?.setCountInMeasures(countInMeasures);

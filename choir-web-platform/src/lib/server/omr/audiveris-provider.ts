@@ -1141,20 +1141,13 @@ export function mergeMusicXmlPages(pages: Array<{ sheetNumber: number; musicXml:
     }
   }
 
+  let previousPartCount = baseParts.length;
   for (const doc of parsedDocs.slice(1)) {
     const root = doc.root as Record<string, unknown>;
     const partList = ensureObject(root["part-list"]);
     const scoreParts = asArray<Record<string, unknown>>(partList["score-part"]);
-    for (const scorePart of scoreParts) {
-      const id = readAttribute(scorePart, "id");
-      if (!id || scorePartById.has(id)) {
-        continue;
-      }
-      scorePartById.set(id, scorePart);
-      baseScoreParts.push(scorePart);
-    }
-
     const parts = asArray<Record<string, unknown>>(root.part);
+    const layoutChanged = parts.length !== previousPartCount;
     renumberRestartedMeasures(baseParts, parts);
     for (const incomingPart of parts) {
       const id = readAttribute(incomingPart, "id");
@@ -1163,16 +1156,28 @@ export function mergeMusicXmlPages(pages: Array<{ sheetNumber: number; musicXml:
       }
       const incomingMeasures = asArray<Record<string, unknown>>(incomingPart.measure);
       const existing = partById.get(id);
-      if (!existing) {
-        incomingPart.measure = incomingMeasures;
-        partById.set(id, incomingPart);
-        baseParts.push(incomingPart);
+      const scorePart = scoreParts.find((candidate) => readAttribute(candidate, "id") === id) ?? null;
+      // Audiveris restarts P1 on every page. Joining by that id when the
+      // staff count changed glues a later Soprano onto the previous Alto
+      // and turns the extra piano staves into new instruments.
+      if (existing && !layoutChanged) {
+        const existingMeasures = asArray<Record<string, unknown>>(existing.measure);
+        existingMeasures.push(...incomingMeasures);
+        existing.measure = existingMeasures;
         continue;
       }
-      const existingMeasures = asArray<Record<string, unknown>>(existing.measure);
-      existingMeasures.push(...incomingMeasures);
-      existing.measure = existingMeasures;
+      const storedId = existing ? `${id}-p${doc.sheetNumber}` : id;
+      incomingPart["@_id"] = storedId;
+      incomingPart.measure = incomingMeasures;
+      if (scorePart && !scorePartById.has(storedId)) {
+        const storedScorePart = { ...scorePart, "@_id": storedId };
+        scorePartById.set(storedId, storedScorePart);
+        baseScoreParts.push(storedScorePart);
+      }
+      partById.set(storedId, incomingPart);
+      baseParts.push(incomingPart);
     }
+    previousPartCount = parts.length;
   }
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n${builder.build({ "score-partwise": baseRoot })}`;

@@ -18,7 +18,6 @@ export function enforcePartIdentity(
   const layoutRegions: LayoutRegion[] = [];
   const slots: Slot[] = [];
   const binding = new Map<string, Slot>();
-  let establishingSystem: string | null = null;
 
   systems.forEach((system, index) => {
     const [start, end] = system.measureRange;
@@ -28,14 +27,10 @@ export function enforcePartIdentity(
     );
     const claimed = new Set<string>();
     const staves = new Map<string, string[]>();
-    const systemId = `${system.pageNumber}:${system.systemNumber}`;
 
     for (const part of active) {
       const key = roleKey(part);
       const reconnectable = isReconnectable(key);
-      if (reconnectable && establishingSystem == null) {
-        establishingSystem = systemId;
-      }
       const bound = binding.get(part.id);
       if (bound) {
         const conflict = reconnectable ? conflictingLabel(part, facts, start, end) : null;
@@ -48,14 +43,6 @@ export function enforcePartIdentity(
           continue;
         }
         if (bound.owner.id !== part.id) {
-          const ownerSounding = score.notes.some(
-            (note) => note.partId === bound.owner.id && inSystem(note.measureNumber)
-          );
-          if (ownerSounding) {
-            warnings.push(reviewWarning(system, start, labelOf(bound.owner)));
-            assignStaff(staves, part, part.id);
-            continue;
-          }
           moveNotes(score, part.id, bound.owner, inSystem);
         }
         claimed.add(bound.key);
@@ -64,17 +51,13 @@ export function enforcePartIdentity(
       }
 
       if (reconnectable) {
-        const resting = slots.find((slot) => slot.key === key && !claimed.has(slot.key));
-        if (resting) {
-          moveNotes(score, part.id, resting.owner, inSystem);
-          binding.set(part.id, resting);
-          claimed.add(resting.key);
-          assignStaff(staves, part, resting.owner.id);
+        const existing = slots.find((slot) => slot.key === key);
+        if (existing && startsAfter(score, part.id, existing.owner.id)) {
+          moveNotes(score, part.id, existing.owner, () => true);
+          binding.set(part.id, existing);
+          claimed.add(existing.key);
+          assignStaff(staves, part, existing.owner.id);
           continue;
-        }
-        const sounding = slots.some((slot) => slot.key === key && claimed.has(slot.key));
-        if (sounding && establishingSystem !== systemId) {
-          warnings.push(reviewWarning(system, start, titleRole(part.canonicalPart)));
         }
       }
 
@@ -152,6 +135,25 @@ function uniqueKey(base: string, slots: Slot[]) {
     key = `${root}#${index}`;
   }
   return key;
+}
+
+function startsAfter(score: ParsedScore, partId: string, ownerId: string) {
+  const mine = firstMeasure(score, partId);
+  const owner = firstMeasure(score, ownerId);
+  return mine != null && owner != null && mine > owner;
+}
+
+function firstMeasure(score: ParsedScore, partId: string) {
+  let earliest: number | null = null;
+  for (const note of score.notes) {
+    if (note.partId !== partId) {
+      continue;
+    }
+    if (earliest == null || note.measureNumber < earliest) {
+      earliest = note.measureNumber;
+    }
+  }
+  return earliest;
 }
 
 function moveNotes(
@@ -239,20 +241,6 @@ function shiftWarning(
   return {
     code: "IDENTITY_SHIFT",
     message: `System ${system.systemNumber} on page ${system.pageNumber}: printed “${printed}” does not match the established ${labelOf(owner)} part. The original part was kept.`,
-    measure,
-    page: system.pageNumber,
-    system: system.systemNumber,
-  };
-}
-
-function reviewWarning(
-  system: { pageNumber: number; systemNumber: number },
-  measure: number,
-  role: string
-): StructuredWarning {
-  return {
-    code: "IDENTITY_REVIEW",
-    message: `System ${system.systemNumber} on page ${system.pageNumber}: another ${role} staff is sounding while ${role} is already active. The original ${role} was kept and this staff was flagged for review.`,
     measure,
     page: system.pageNumber,
     system: system.systemNumber,
