@@ -428,7 +428,7 @@ export function updateLastTempoPercent(id: string, tempoPercent: number) {
       WHERE id = ?
       `
     )
-    .run(Math.max(50, Math.min(120, Math.round(tempoPercent))), new Date().toISOString(), id);
+    .run(Math.max(50, Math.min(150, Math.round(tempoPercent))), new Date().toISOString(), id);
 }
 
 export function updateDirectorPartAssignments(

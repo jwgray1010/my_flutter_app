@@ -2,11 +2,13 @@ import type {
   CanonicalPartId,
   KeyRegion,
   MeasureInfo,
+  NotationNote,
   NoteEvent,
   ParsedScore,
   RecognizedPart,
 } from "@/lib/score-types";
 import { buildPerformanceRoute, type RepeatMeasure } from "@/lib/repeats";
+import { mergeTiedNotes } from "@/lib/ties";
 import { assignChoirRegisters, inferChoirVoicing } from "@/lib/voicing";
 
 const MAJOR_KEYS = ["Cb", "Gb", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E", "B", "F#", "C#"];
@@ -44,8 +46,9 @@ export function parseMusicXmlToScore(
 
   const timeline = readPartTimeline(partNodes[0]);
   const rehearsalMarks = readRehearsalMarks(partNodes[0]);
-  const suggestedTempoBpm = readTempoHint(partNodes[0]) ?? 88;
+  const suggestedTempoBpm = timeline.tempoRegions[0]?.bpm ?? readTempoHint(partNodes[0]) ?? 88;
   const notes: NoteEvent[] = [];
+  const notationNotes: NotationNote[] = [];
   const parts: RecognizedPart[] = [];
 
   partNodes.forEach((partNode, idx) => {
@@ -54,6 +57,12 @@ export function parseMusicXmlToScore(
     const partTimeline = idx === 0 ? timeline : readPartTimeline(partNode);
     const staves = estimatePartStaves(partNode);
     const piano = partLooksLikePiano(sourceName, staves, readClefSigns(partNode));
+    notationNotes.push(
+      ...partTimeline.writtenNotes.map((note) => ({
+        ...note,
+        sourcePartId,
+      }))
+    );
     appendPartNotes(partTimeline.notes, {
       sourcePartId,
       sourceName,
@@ -77,8 +86,10 @@ export function parseMusicXmlToScore(
     sourceType,
     parts,
     notes: notes.sort((a, b) => a.startBeat - b.startBeat || a.midi - b.midi),
+    notationNotes,
     measures: timeline.measures,
     suggestedTempoBpm,
+    tempoRegions: timeline.tempoRegions,
     keySignature: keyRegions[0]?.label ?? null,
     keyRegions,
     inferredVoicing: inferChoirVoicing(parts),
@@ -102,8 +113,10 @@ interface RawNote {
 interface PartTimeline {
   measures: MeasureInfo[];
   notes: RawNote[];
+  writtenNotes: RawNote[];
   keyRegions: KeyRegion[];
   repeats: RepeatMeasure[];
+  tempoRegions: { startBeat: number; bpm: number }[];
 }
 
 function readPartTimeline(partNode: Element): PartTimeline {
@@ -112,6 +125,7 @@ function readPartTimeline(partNode: Element): PartTimeline {
   const notes: RawNote[] = [];
   const keyRegions: KeyRegion[] = [];
   const repeats: RepeatMeasure[] = [];
+  const tempoRegions: { startBeat: number; bpm: number }[] = [];
   let divisions = 1;
   let beats = 4;
   let beatType = 4;
@@ -173,6 +187,17 @@ function readPartTimeline(partNode: Element): PartTimeline {
       }
       if (child.tagName === "barline") {
         readBarline(child, repeat);
+        continue;
+      }
+      if (child.tagName === "direction") {
+        const tempo = parseIntOr(child.querySelector("sound")?.getAttribute("tempo"), Number.NaN);
+        if (Number.isFinite(tempo) && tempo > 20 && tempo < 250) {
+          const beat = absoluteBeat + global / divisions;
+          const previous = tempoRegions[tempoRegions.length - 1];
+          if (!previous || previous.bpm !== tempo || Math.abs(previous.startBeat - beat) > 1e-6) {
+            tempoRegions.push({ startBeat: beat, bpm: tempo });
+          }
+        }
         continue;
       }
       if (child.tagName === "backup") {
@@ -255,36 +280,15 @@ function readPartTimeline(partNode: Element): PartTimeline {
     absoluteBeat += length;
   });
 
-  return { measures, notes: mergeTiedNotes(notes), keyRegions, repeats };
-}
-
-function mergeTiedNotes(notes: RawNote[]): RawNote[] {
-  const open = new Map<string, RawNote>();
-  const merged: RawNote[] = [];
-  for (const note of notes) {
-    const key = `${note.voice}|${note.staff}|${note.midi}`;
-    const previous = open.get(key);
-    if (
-      note.tieStop &&
-      previous?.tieStart &&
-      Math.abs(previous.startBeat + previous.durationBeats - note.startBeat) < 0.02
-    ) {
-      previous.durationBeats += note.durationBeats;
-      previous.tieStart = note.tieStart;
-      if (!note.tieStart) {
-        open.delete(key);
-      }
-      continue;
-    }
-    const copy = { ...note };
-    merged.push(copy);
-    if (note.tieStart) {
-      open.set(key, copy);
-    } else {
-      open.delete(key);
-    }
-  }
-  return merged;
+  const writtenNotes = notes.map((note) => ({ ...note }));
+  return {
+    measures,
+    notes: mergeTiedNotes(notes),
+    writtenNotes,
+    keyRegions,
+    repeats,
+    tempoRegions,
+  };
 }
 
 function tieFlags(note: Element): { start: boolean; stop: boolean } {

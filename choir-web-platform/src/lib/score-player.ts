@@ -1,5 +1,7 @@
 import * as Tone from "tone";
+import { featureFlags } from "@/lib/feature-flags";
 import type { CanonicalPartId, ParsedScore } from "@/lib/score-types";
+import { beatsAfterSeconds, clampTempoPercent, secondsBetween } from "@/lib/tempo-control";
 
 export interface PlaybackSnapshot {
   isPlaying: boolean;
@@ -121,7 +123,7 @@ export class ScorePlayer {
   }
 
   setTempoPercent(value: number) {
-    const clamped = Math.max(50, Math.min(120, Math.round(value)));
+    const clamped = clampTempoPercent(value, featureFlags.rehearsalTempoControl);
     if (this.tempoPercent === clamped) {
       return;
     }
@@ -274,12 +276,34 @@ export class ScorePlayer {
       return this.currentBeat;
     }
     const elapsedSec = Tone.now() - this.playStartTimeSec;
-    return this.playStartBeat + elapsedSec / this.secondsPerBeat();
+    if (!featureFlags.rehearsalTempoControl) {
+      return this.playStartBeat + elapsedSec / this.secondsPerBeat();
+    }
+    return beatsAfterSeconds(
+      this.playStartBeat,
+      elapsedSec,
+      this.score.tempoRegions ?? [],
+      this.score.suggestedTempoBpm,
+      this.tempoPercent
+    );
   }
 
   private secondsPerBeat() {
     const effectiveBpm = this.score.suggestedTempoBpm * (this.tempoPercent / 100);
     return 60 / Math.max(1, effectiveBpm);
+  }
+
+  private secondsAcross(fromBeat: number, toBeat: number) {
+    if (!featureFlags.rehearsalTempoControl) {
+      return (toBeat - fromBeat) * this.secondsPerBeat();
+    }
+    return secondsBetween(
+      fromBeat,
+      toBeat,
+      this.score.tempoRegions ?? [],
+      this.score.suggestedTempoBpm,
+      this.tempoPercent
+    );
   }
 
   private startTicker() {
@@ -311,8 +335,15 @@ export class ScorePlayer {
     }
 
     const lookaheadSec = 0.2;
-    const lookaheadBeats = lookaheadSec / this.secondsPerBeat();
-    const beatWindowEnd = currentBeat + lookaheadBeats;
+    const beatWindowEnd = featureFlags.rehearsalTempoControl
+      ? beatsAfterSeconds(
+          currentBeat,
+          lookaheadSec,
+          this.score.tempoRegions ?? [],
+          this.score.suggestedTempoBpm,
+          this.tempoPercent
+        )
+      : currentBeat + lookaheadSec / this.secondsPerBeat();
     const now = Tone.now();
 
     while (
@@ -324,9 +355,8 @@ export class ScorePlayer {
       if (!this.enabledParts.has(note.partCanonical)) {
         continue;
       }
-      const offsetBeats = note.startBeat - currentBeat;
-      const when = now + Math.max(0, offsetBeats * this.secondsPerBeat());
-      const durSec = Math.max(0.04, note.durationBeats * this.secondsPerBeat());
+      const when = now + Math.max(0, this.secondsAcross(currentBeat, note.startBeat));
+      const durSec = Math.max(0.04, this.secondsAcross(note.startBeat, note.startBeat + note.durationBeats));
       this.synthFor(note.partCanonical).triggerAttackRelease(
         Tone.Frequency(note.midi, "midi").toFrequency(),
         durSec,

@@ -1,7 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StaffColorOverlay } from "@/components/staff-color-overlay";
+import { TieReview } from "@/components/tie-review";
+import { featureFlags } from "@/lib/feature-flags";
 import { ScorePlayer, type PlaybackSnapshot } from "@/lib/score-player";
+import {
+  canonicalAssignmentForRole,
+  STAFF_ROLES,
+  type StaffCorrection,
+  type StaffMarker,
+  type StaffRole,
+} from "@/lib/staff-colors";
 import type {
   AssignablePartId,
   CanonicalPartId,
@@ -10,6 +20,8 @@ import type {
   ParsedScore,
   SavedScoreRecord,
   SavedScoreSummary,
+  StaffIdentityCorrection,
+  TieEdit,
 } from "@/lib/score-types";
 
 const PART_BUTTONS: CanonicalPartId[] = [
@@ -500,7 +512,13 @@ export default function Home() {
 
   const adjustTempo = (delta: number) => {
     playerRef.current?.adjustTempoPercent(delta);
-    const nextTempo = Math.max(50, Math.min(120, Math.round(snapshot.tempoPercent + delta)));
+    const nextTempo = playerRef.current?.snapshot().tempoPercent ?? snapshot.tempoPercent;
+    void persistTempoPercent(nextTempo);
+  };
+
+  const setTempoPercent = (percent: number) => {
+    playerRef.current?.setTempoPercent(percent);
+    const nextTempo = playerRef.current?.snapshot().tempoPercent ?? percent;
     void persistTempoPercent(nextTempo);
   };
 
@@ -520,6 +538,64 @@ export default function Home() {
     }
     hydrateFromSavedRecord(body.item, "check-score");
     setFeedbackMessage("Part assignments saved.");
+    await refreshSavedMusic();
+  };
+
+  const saveStaffCorrection = async (correction: StaffCorrection, marker: StaffMarker) => {
+    if (!currentScoreId) {
+      return;
+    }
+    const canonical = canonicalAssignmentForRole(correction.role);
+    const assignments = canonical
+      ? Object.fromEntries(marker.logicalPartIds.map((partId) => [partId, canonical]))
+      : undefined;
+    const response = await fetch(`/api/my-music/${currentScoreId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "updateStaffIdentity", correction, assignments }),
+    });
+    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    if (!response.ok || !body.item) {
+      setError(body.message ?? "Could not save the staff correction.");
+      return;
+    }
+    hydrateFromSavedRecord(body.item, activePanel === "review" ? "review" : "check-score");
+    setFeedbackMessage("Staff correction saved. Automatic recognition will not replace it.");
+    await refreshSavedMusic();
+  };
+
+  const saveTieEdits = async (edits: TieEdit[]) => {
+    if (!currentScoreId || !loadedScoreRecord) {
+      return;
+    }
+    const merged = [...loadedScoreRecord.manualCorrections.tieEdits];
+    for (const edit of edits) {
+      const index = merged.findIndex(
+        (item) =>
+          item.sourcePartId === edit.sourcePartId &&
+          item.voice === edit.voice &&
+          item.staff === edit.staff &&
+          item.midi === edit.midi &&
+          Math.abs(item.startBeat - edit.startBeat) < 0.02
+      );
+      if (index >= 0) {
+        merged[index] = edit;
+      } else {
+        merged.push(edit);
+      }
+    }
+    const response = await fetch(`/api/my-music/${currentScoreId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "updateTieEdits", tieEdits: merged }),
+    });
+    const body = (await response.json()) as { item?: SavedScoreRecord; message?: string };
+    if (!response.ok || !body.item) {
+      setError(body.message ?? "Could not save the tie correction.");
+      return;
+    }
+    hydrateFromSavedRecord(body.item, "review");
+    setFeedbackMessage("Tie correction saved without reprocessing the score.");
     await refreshSavedMusic();
   };
 
@@ -714,6 +790,8 @@ export default function Home() {
             onForward4={() => jumpByMeasures(4)}
             onTempoDown={() => adjustTempo(-5)}
             onTempoUp={() => adjustTempo(5)}
+            printedTempoBpm={score?.suggestedTempoBpm ?? null}
+            onSetTempoPercent={setTempoPercent}
             onGoToMeasure={gotoSelectedMeasure}
             onJumpToMeasure={jumpToMeasure}
             onStartLoop={setLoopRange}
@@ -760,6 +838,8 @@ export default function Home() {
             onForward4={() => jumpByMeasures(4)}
             onTempoDown={() => adjustTempo(-5)}
             onTempoUp={() => adjustTempo(5)}
+            printedTempoBpm={score?.suggestedTempoBpm ?? null}
+            onSetTempoPercent={setTempoPercent}
             onGoToMeasure={gotoSelectedMeasure}
             onJumpToMeasure={jumpToMeasure}
             onStartLoop={setLoopRange}
@@ -985,6 +1065,15 @@ export default function Home() {
                     Piano: {pianoStatusLabel(loadedScoreRecord.parsedScore)}
                   </p>
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {featureFlags.staffColorOverlay ? (
+                      <StaffColorOverlay
+                        parts={loadedScoreRecord.parsedScore.parts}
+                        rawMusicXml={loadedScoreRecord.parsedScore.rawMusicXml}
+                        corrections={staffCorrectionsOf(loadedScoreRecord.manualCorrections.staffIdentity)}
+                        imageUrl={scoreImageUrl(currentScoreId, loadedScoreRecord.sourceMimeType)}
+                        onCorrect={(correction, marker) => void saveStaffCorrection(correction, marker)}
+                      />
+                    ) : null}
                     {PART_BUTTONS.map((part) => {
                       const detected = loadedScoreRecord.parsedScore.parts.filter(
                         (item) => item.canonicalPart === part
@@ -1000,6 +1089,11 @@ export default function Home() {
                     })}
                   </div>
                 </div>
+
+                <TieReview
+                  notes={loadedScoreRecord.parsedScore.notationNotes ?? []}
+                  onSave={(edits) => void saveTieEdits(edits)}
+                />
 
                 <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-900/40 p-4">
                   <p className="text-sm font-semibold text-zinc-200">What measure does this page start with?</p>
@@ -1061,6 +1155,15 @@ export default function Home() {
             <h2 className="text-xl font-semibold">Fix Score</h2>
             {loadedScoreRecord ? (
               <div className="mt-4 space-y-5">
+                {featureFlags.staffColorOverlay ? (
+                  <StaffColorOverlay
+                    parts={loadedScoreRecord.parsedScore.parts}
+                    rawMusicXml={loadedScoreRecord.parsedScore.rawMusicXml}
+                    corrections={staffCorrectionsOf(loadedScoreRecord.manualCorrections.staffIdentity)}
+                    imageUrl={scoreImageUrl(currentScoreId, loadedScoreRecord.sourceMimeType)}
+                    onCorrect={(correction, marker) => void saveStaffCorrection(correction, marker)}
+                  />
+                ) : null}
                 <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-4">
                   <p className="text-sm font-semibold text-zinc-200">Part-specific review</p>
                   <div className="mt-2 grid grid-cols-3 gap-2">
@@ -1624,6 +1727,22 @@ function pitchNameToMidi(value: string) {
   return Math.max(0, Math.min(127, midi));
 }
 
+function staffCorrectionsOf(items: StaffIdentityCorrection[] | undefined): StaffCorrection[] {
+  return (items ?? []).flatMap((item) => {
+    if (!(STAFF_ROLES as readonly string[]).includes(item.role)) {
+      return [];
+    }
+    return [{ ...item, role: item.role as StaffRole }];
+  });
+}
+
+function scoreImageUrl(id: string | null, mimeType: string) {
+  if (!id || !mimeType.startsWith("image/")) {
+    return null;
+  }
+  return `/api/my-music/${id}/source`;
+}
+
 function PanelTab(props: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button
@@ -1669,6 +1788,8 @@ function RemoteControlPanel(props: {
   onForward4: () => void;
   onTempoDown: () => void;
   onTempoUp: () => void;
+  printedTempoBpm?: number | null;
+  onSetTempoPercent?: (percent: number) => void;
   onGoToMeasure: () => void;
   onJumpToMeasure: (measure: number) => void;
   onStartLoop: () => void;
@@ -1862,20 +1983,29 @@ function RemoteControlPanel(props: {
       {/* 4. TEMPO / COUNT-IN */}
       <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-3">
         <p className="mb-2 text-sm font-semibold tracking-[0.08em] text-zinc-300">TEMPO</p>
-        <div className="grid grid-cols-2 gap-3">
-          <ControlButton
-            label="TEMPO -"
-            onClick={props.onTempoDown}
+        {featureFlags.rehearsalTempoControl ? (
+          <TempoControl
             disabled={!props.scoreLoaded}
-            large={props.largeButtons}
+            percent={props.snapshot.tempoPercent}
+            printedBpm={props.printedTempoBpm ?? null}
+            onSetPercent={(percent) => props.onSetTempoPercent?.(percent)}
           />
-          <ControlButton
-            label="TEMPO +"
-            onClick={props.onTempoUp}
-            disabled={!props.scoreLoaded}
-            large={props.largeButtons}
-          />
-        </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <ControlButton
+              label="TEMPO -"
+              onClick={props.onTempoDown}
+              disabled={!props.scoreLoaded}
+              large={props.largeButtons}
+            />
+            <ControlButton
+              label="TEMPO +"
+              onClick={props.onTempoUp}
+              disabled={!props.scoreLoaded}
+              large={props.largeButtons}
+            />
+          </div>
+        )}
 
         <p className="mb-2 mt-3 text-sm font-semibold tracking-[0.08em] text-zinc-300">COUNT-IN</p>
         <div className="grid grid-cols-3 gap-2">
@@ -1957,6 +2087,34 @@ function allPartsSelected(
     }
   }
   return availableCanonicalParts.size > 0;
+}
+
+function TempoControl(props: {
+  disabled: boolean;
+  percent: number;
+  printedBpm: number | null;
+  onSetPercent: (percent: number) => void;
+}) {
+  const printed = props.printedBpm && props.printedBpm > 0 ? props.printedBpm : null;
+  const effective = printed == null ? null : Math.round(printed * (props.percent / 100) * 100) / 100;
+  return (
+    <div>
+      <p className="text-sm text-zinc-200">Printed BPM {printed ?? "not marked"}</p>
+      <p className="text-sm text-zinc-200">Playback speed {props.percent}%</p>
+      <p className="text-sm text-zinc-200">Effective {effective ?? "—"} BPM</p>
+      <input
+        aria-label="Playback speed"
+        className="mt-2 w-full"
+        type="range"
+        min={50}
+        max={150}
+        step={5}
+        value={props.percent}
+        disabled={props.disabled}
+        onChange={(event) => props.onSetPercent(Number(event.target.value))}
+      />
+    </div>
+  );
 }
 
 function ControlButton(props: {
