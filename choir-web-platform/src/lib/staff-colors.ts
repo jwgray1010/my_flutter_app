@@ -93,6 +93,8 @@ export interface StaffMarker {
   source: "detected" | "director";
   confidence: "confirmed" | "needs-review";
   position: StaffMarkerPosition | null;
+  /** Pink/purple (or tenor/bass) voice marks. Empty while the staff is in unison. */
+  innerVoices: Array<{ label: string; color: string }>;
 }
 
 const CHOIR = new Set(["SOPRANO", "ALTO", "TENOR", "BASS"]);
@@ -135,6 +137,7 @@ export function buildStaffMarkers(
       source: correction ? "director" : "detected",
       confidence: correction ? "confirmed" : detected.confidence,
       position: positions[staffId] ?? null,
+      innerVoices: innerVoicesFor(role, group.parts),
     });
   }
   return markers.sort(
@@ -227,6 +230,33 @@ function inferRole(parts: RecognizedPart[]): { role: StaffRole; confidence: "con
     return { role: "IGNORE", confidence: "needs-review" };
   }
   return { role, confidence: needsReview ? "needs-review" : "confirmed" };
+}
+
+function innerVoicesFor(role: StaffRole, parts: RecognizedPart[]): Array<{ label: string; color: string }> {
+  if (role !== "SOPRANO_ALTO" && role !== "TENOR_BASS") {
+    return [];
+  }
+  if (parts.length < 2) {
+    return [];
+  }
+  const placements = parts.map((part) => part.sharedPlacement);
+  const marked = placements.some((placement) => placement != null);
+  if (marked && placements.every((placement) => placement === "unison" || placement === "ambiguous")) {
+    return [];
+  }
+  if (marked && !placements.some((placement) => placement === "independent" || placement === "resting")) {
+    return [];
+  }
+  if (role === "SOPRANO_ALTO") {
+    return [
+      { label: "Soprano", color: STAFF_ROLE_COLORS.SOPRANO },
+      { label: "Alto", color: STAFF_ROLE_COLORS.ALTO },
+    ];
+  }
+  return [
+    { label: "Tenor", color: STAFF_ROLE_COLORS.TENOR },
+    { label: "Bass", color: STAFF_ROLE_COLORS.BASS },
+  ];
 }
 
 function numberedRole(

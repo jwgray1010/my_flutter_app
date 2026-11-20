@@ -14,4 +14,5 @@ export const featureFlags = {
   rehearsalTempoControl: false,
   repeatNavigationV2: false,
   tiePlaybackV2: true,
+  sharedStaffVoices: true,
 };

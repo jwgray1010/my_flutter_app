@@ -1,6 +1,7 @@
 import * as Tone from "tone";
 import { featureFlags } from "@/lib/feature-flags";
 import type { CanonicalPartId, ParsedScore } from "@/lib/score-types";
+import { audibleCanonical } from "@/lib/shared-voices";
 import { beatsAfterSeconds, clampTempoPercent, secondsBetween } from "@/lib/tempo-control";
 
 export interface PlaybackSnapshot {
@@ -249,11 +250,12 @@ export class ScorePlayer {
   playStartingPitches() {
     const firstByPart = new Map<CanonicalPartId, number>();
     for (const note of this.orderedNotes) {
-      if (!this.enabledParts.has(note.partCanonical)) {
+      const channel = audibleCanonical(note, this.score.parts, this.enabledParts);
+      if (!channel) {
         continue;
       }
-      if (!firstByPart.has(note.partCanonical)) {
-        firstByPart.set(note.partCanonical, note.midi);
+      if (!firstByPart.has(channel)) {
+        firstByPart.set(channel, note.midi);
       }
     }
     let offset = 0;
@@ -352,12 +354,13 @@ export class ScorePlayer {
     ) {
       const note = this.orderedNotes[this.nextEventIndex];
       this.nextEventIndex += 1;
-      if (!this.enabledParts.has(note.partCanonical)) {
+      const channel = audibleCanonical(note, this.score.parts, this.enabledParts);
+      if (!channel) {
         continue;
       }
       const when = now + Math.max(0, this.secondsAcross(currentBeat, note.startBeat));
       const durSec = Math.max(0.04, this.secondsAcross(note.startBeat, note.startBeat + note.durationBeats));
-      this.synthFor(note.partCanonical).triggerAttackRelease(
+      this.synthFor(channel).triggerAttackRelease(
         Tone.Frequency(note.midi, "midi").toFrequency(),
         durSec,
         when,

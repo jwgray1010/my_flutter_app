@@ -7,7 +7,9 @@ import type {
   ParsedScore,
   RecognizedPart,
 } from "@/lib/score-types";
+import { featureFlags } from "@/lib/feature-flags";
 import { buildPerformanceRoute, type RepeatMeasure } from "@/lib/repeats";
+import { beatInUnison, pairedVoiceRoles, type UnisonSpan } from "@/lib/shared-voices";
 import { mergeTiedNotes } from "@/lib/ties";
 import { assignChoirRegisters, inferChoirVoicing } from "@/lib/voicing";
 
@@ -70,6 +72,8 @@ export function parseMusicXmlToScore(
       piano,
       parts,
       notes,
+      voiceActivity: partTimeline.voiceActivity,
+      unisonSpans: partTimeline.unisonSpans,
     });
   });
 
@@ -110,6 +114,13 @@ interface RawNote {
   tieStop: boolean;
 }
 
+interface VoiceActivity {
+  voice: number;
+  staff: number;
+  notes: number;
+  rests: number;
+}
+
 interface PartTimeline {
   measures: MeasureInfo[];
   notes: RawNote[];
@@ -117,6 +128,8 @@ interface PartTimeline {
   keyRegions: KeyRegion[];
   repeats: RepeatMeasure[];
   tempoRegions: { startBeat: number; bpm: number }[];
+  voiceActivity: VoiceActivity[];
+  unisonSpans: UnisonSpan[];
 }
 
 function readPartTimeline(partNode: Element): PartTimeline {
@@ -126,6 +139,8 @@ function readPartTimeline(partNode: Element): PartTimeline {
   const keyRegions: KeyRegion[] = [];
   const repeats: RepeatMeasure[] = [];
   const tempoRegions: { startBeat: number; bpm: number }[] = [];
+  const voiceActivity = new Map<string, VoiceActivity>();
+  const unisonSpans: UnisonSpan[] = [];
   let divisions = 1;
   let beats = 4;
   let beatType = 4;
@@ -198,6 +213,7 @@ function readPartTimeline(partNode: Element): PartTimeline {
             tempoRegions.push({ startBeat: beat, bpm: tempo });
           }
         }
+        readUnisonWords(child, absoluteBeat + global / divisions, unisonSpans);
         continue;
       }
       if (child.tagName === "backup") {
@@ -236,7 +252,9 @@ function readPartTimeline(partNode: Element): PartTimeline {
         startDivs = lastChordStart;
         voiceEnd.set(voice, Math.max(voiceEnd.get(voice) ?? 0, startDivs + durationDivs));
       }
-      if (child.querySelector("rest") != null || durationDivs <= 0) {
+      const isRest = child.querySelector("rest") != null || durationDivs <= 0;
+      rememberVoice(voiceActivity, voice, staff, isRest);
+      if (isRest) {
         continue;
       }
       const pitch = child.querySelector("pitch");
@@ -288,7 +306,37 @@ function readPartTimeline(partNode: Element): PartTimeline {
     keyRegions,
     repeats,
     tempoRegions,
+    voiceActivity: [...voiceActivity.values()],
+    unisonSpans,
   };
+}
+
+function readUnisonWords(direction: Element, beat: number, spans: UnisonSpan[]) {
+  const staff = parseIntOr(textOf(direction.querySelector("staff")), 1);
+  for (const wordsNode of Array.from(direction.querySelectorAll("words"))) {
+    const words = (wordsNode.textContent ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (/^(unis\.?|unison|a ?2)$/.test(words)) {
+      spans.push({ staff, startBeat: beat, endBeat: null });
+    } else if (/^(div\.?|divisi)$/.test(words)) {
+      const open = [...spans].reverse().find((span) => span.staff === staff && span.endBeat == null);
+      if (open) {
+        open.endBeat = beat;
+      } else {
+        spans.push({ staff, startBeat: 0, endBeat: beat });
+      }
+    }
+  }
+}
+
+function rememberVoice(activity: Map<string, VoiceActivity>, voice: number, staff: number, rest: boolean) {
+  const key = `${staff}:${voice}`;
+  const current = activity.get(key) ?? { voice, staff, notes: 0, rests: 0 };
+  if (rest) {
+    current.rests += 1;
+  } else {
+    current.notes += 1;
+  }
+  activity.set(key, current);
 }
 
 function tieFlags(note: Element): { start: boolean; stop: boolean } {
@@ -336,6 +384,8 @@ function appendPartNotes(
     piano: boolean;
     parts: RecognizedPart[];
     notes: NoteEvent[];
+    voiceActivity: VoiceActivity[];
+    unisonSpans: UnisonSpan[];
   }
 ) {
   if (input.piano || rawNotes.length === 0) {
@@ -360,6 +410,11 @@ function appendPartNotes(
   }
 
   const splitByStaff = input.staves > 1;
+  const sharedRoles = featureFlags.sharedStaffVoices && !splitByStaff ? pairedVoiceRoles(input.sourceName) : null;
+  if (sharedRoles) {
+    appendNamedSharedVoices(rawNotes, sharedRoles, input);
+    return;
+  }
   const grouped = new Map<string, RawNote[]>();
   for (const note of rawNotes) {
     const staff = splitByStaff ? note.staff : 0;
@@ -521,21 +576,116 @@ function readClefSigns(partNode: Element): string[] {
  * voice (in ascending voice-number order) to its named role.
  */
 function detectPairedVoiceNames(sourceName: string, voiceCount: number): (CanonicalPartId | null)[] | null {
-  const normalized = sourceName.toLowerCase().replace(/[.\s]+/g, " ").trim();
-  const pairs: Array<{ pattern: RegExp; roles: CanonicalPartId[] }> = [
-    { pattern: /soprano.*alto|s\s*\/\s*a\b|^s a$|^sa$/, roles: ["SOPRANO", "ALTO"] },
-    { pattern: /tenor.*bass|t\s*\/\s*b\b|^t b$|^tb$/, roles: ["TENOR", "BASS"] },
-    { pattern: /soprano.*soprano|s\s*\/\s*s\b/, roles: ["SOPRANO", "SOPRANO"] },
-    { pattern: /alto.*alto/, roles: ["ALTO", "ALTO"] },
-    { pattern: /tenor.*tenor/, roles: ["TENOR", "TENOR"] },
-    { pattern: /bass.*bass/, roles: ["BASS", "BASS"] },
-  ];
-  for (const { pattern, roles } of pairs) {
-    if (pattern.test(normalized) && roles.length === voiceCount) {
-      return roles;
-    }
+  const roles = pairedVoiceRoles(sourceName);
+  if (roles && roles.length === voiceCount) {
+    return roles;
   }
   return null;
+}
+
+function appendNamedSharedVoices(
+  rawNotes: RawNote[],
+  roles: [CanonicalPartId, CanonicalPartId],
+  input: {
+    sourcePartId: string;
+    sourceName: string;
+    staves: number;
+    parts: RecognizedPart[];
+    notes: NoteEvent[];
+    voiceActivity: VoiceActivity[];
+    unisonSpans: UnisonSpan[];
+  }
+) {
+  const active = input.voiceActivity.filter((item) => item.notes > 0 || item.rests > 0);
+  const voiceNumbers = [...new Set(active.map((item) => item.voice))].sort((left, right) => left - right);
+  const voiceForRole: Array<number | null> = roles.map((_, index) =>
+    voiceNumbers.includes(index + 1) ? index + 1 : null
+  );
+  const used = new Set(voiceForRole.filter((voice): voice is number => voice != null));
+  const leftovers = voiceNumbers.filter((voice) => !used.has(voice));
+  for (let index = 0; index < voiceForRole.length && leftovers.length > 0; index += 1) {
+    if (voiceForRole[index] == null) {
+      voiceForRole[index] = leftovers.shift() ?? null;
+    }
+  }
+  const missingVoice = voiceForRole.some((voice) => voice == null);
+  const explicitRest = active.some((item) => item.notes === 0 && item.rests > 0);
+  const ambiguous = missingVoice && !explicitRest && input.unisonSpans.length === 0;
+  const created: RecognizedPart[] = [];
+  const partByVoice = new Map<number, RecognizedPart>();
+  roles.forEach((role, index) => {
+    const voice = voiceForRole[index] ?? index + 1;
+    const part = makePart({
+      id: `${input.sourcePartId}:v${voice}`,
+      sourceName: `${input.sourceName} (voice ${voice})`,
+      sourcePartId: input.sourcePartId,
+      canonicalPart: role,
+      confident: !ambiguous,
+      isSolo: false,
+      staves: input.staves,
+      voiceNumber: voice,
+    });
+    input.parts.push(part);
+    created.push(part);
+    if (voiceForRole[index] != null) {
+      partByVoice.set(voiceForRole[index] as number, part);
+    }
+  });
+
+  const rows: Array<{ raw: RawNote; event: NoteEvent }> = [];
+  for (const note of rawNotes) {
+    const part = partByVoice.get(note.voice) ?? created[0];
+    if (!part) {
+      continue;
+    }
+    rows.push({ raw: note, event: toNoteEvent(note, part) });
+  }
+  const dropped = new Set<NoteEvent>();
+  for (const row of rows) {
+    if (dropped.has(row.event) || !beatInUnison(input.unisonSpans, row.raw.staff, row.raw.startBeat)) {
+      continue;
+    }
+    const others = rows.filter(
+      (other) =>
+        other !== row &&
+        other.raw.staff === row.raw.staff &&
+        Math.abs(other.raw.startBeat - row.raw.startBeat) < 0.02
+    );
+    if (others.some((other) => other.raw.midi !== row.raw.midi)) {
+      continue;
+    }
+    const twins = others.filter(
+      (other) =>
+        other.raw.midi === row.raw.midi && Math.abs(other.raw.durationBeats - row.raw.durationBeats) < 0.02
+    );
+    const keeperVoice = Math.min(row.raw.voice, ...twins.map((twin) => twin.raw.voice));
+    if (row.raw.voice !== keeperVoice) {
+      continue;
+    }
+    for (const twin of twins) {
+      dropped.add(twin.event);
+      row.event.unisonPartIds = [...new Set([...(row.event.unisonPartIds ?? []), twin.event.partId])];
+    }
+    if (twins.length === 0) {
+      row.event.unisonPartIds = created.filter((part) => part.id !== row.event.partId).map((part) => part.id);
+    }
+  }
+  const emitted = rows.filter((row) => !dropped.has(row.event)).map((row) => row.event);
+  input.notes.push(...emitted);
+
+  const unisonPassage = emitted.length > 0 && emitted.every((note) => (note.unisonPartIds?.length ?? 0) > 0);
+  for (const part of created) {
+    const own = emitted.filter((note) => note.partId === part.id);
+    if (ambiguous) {
+      part.sharedPlacement = "ambiguous";
+    } else if (unisonPassage) {
+      part.sharedPlacement = "unison";
+    } else if (own.length === 0) {
+      part.sharedPlacement = "resting";
+    } else {
+      part.sharedPlacement = "independent";
+    }
+  }
 }
 
 export function populatePartRanges(parts: RecognizedPart[], notes: NoteEvent[]) {

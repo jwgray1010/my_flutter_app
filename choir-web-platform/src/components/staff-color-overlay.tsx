@@ -99,6 +99,16 @@ export function StaffColorOverlay(props: {
               <span className="mt-0.5 block text-xs text-zinc-400">
                 {marker.staffId} · {marker.logicalPartIds.join(", ")}
               </span>
+              {marker.innerVoices.length > 0 ? (
+                <span className="mt-1 flex gap-2 text-xs text-zinc-300">
+                  {marker.innerVoices.map((voice) => (
+                    <span key={voice.label}>
+                      <span className="mr-1 inline-block h-2 w-2 rounded-sm align-middle" style={{ backgroundColor: voice.color }} />
+                      {voice.label}
+                    </span>
+                  ))}
+                </span>
+              ) : null}
             </span>
           </button>
         ))}

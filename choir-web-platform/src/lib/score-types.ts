@@ -23,6 +23,8 @@ export interface RecognizedPart {
   /** True when the canonical assignment came from a pitch-based guess
    * rather than an explicit name/label, so the director should confirm it. */
   needsConfirmation: boolean;
+  /** Shared-staff relationship. Absent on a normal one-voice staff. */
+  sharedPlacement?: "independent" | "unison" | "resting" | "ambiguous";
   /** Solo or descant line kept distinct from the choir voicing. */
   isSolo?: boolean;
   /** Lowest/highest MIDI pitch actually sung/played by this voice, and the
@@ -42,6 +44,8 @@ export interface NoteEvent {
   durationBeats: number;
   measureNumber: number;
   velocity: number;
+  /** Other logical parts that sing this same written note. Playback sounds it once. */
+  unisonPartIds?: string[];
 }
 
 /** Written note before tied durations are combined for playback. */

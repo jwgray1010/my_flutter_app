@@ -7,6 +7,8 @@ import type {
   ParsedScore,
   TieEdit,
 } from "@/lib/score-types";
+import { featureFlags } from "@/lib/feature-flags";
+import { ensureDirectorSharedParts, restoreUnisonMembership } from "@/lib/shared-voices";
 import { playbackNotesFromNotation } from "@/lib/ties";
 
 export function emptyManualCorrections(): ManualScoreCorrections {
@@ -54,6 +56,9 @@ export function applyManualCorrections(
   for (const edit of corrections.measurePartEdits) {
     applyMeasurePartEdit(next, edit);
   }
+  if (featureFlags.sharedStaffVoices) {
+    ensureDirectorSharedParts(next, corrections.staffIdentity);
+  }
   next.notes.sort((a, b) => a.startBeat - b.startBeat);
   populatePartRanges(next.parts, next.notes);
   return next;
@@ -100,7 +105,9 @@ export function applyTieEdits(score: ParsedScore, edits: TieEdit[]) {
     note.tieStop = edit.tieStop;
   }
   score.notationNotes = notation;
+  const previousNotes = score.notes.map((note) => ({ ...note, unisonPartIds: note.unisonPartIds ? [...note.unisonPartIds] : undefined }));
   score.notes = playbackNotesFromNotation(notation, score.parts);
+  restoreUnisonMembership(previousNotes, score.notes);
 }
 
 export function applyPartAssignments(
