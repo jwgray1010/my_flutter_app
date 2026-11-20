@@ -5,7 +5,11 @@ import type {
   ManualScoreCorrections,
   MeasurePartEditCorrection,
   ParsedScore,
+  TieEdit,
 } from "@/lib/score-types";
+import { featureFlags } from "@/lib/feature-flags";
+import { ensureDirectorSharedParts, restoreUnisonMembership } from "@/lib/shared-voices";
+import { playbackNotesFromNotation } from "@/lib/ties";
 
 export function emptyManualCorrections(): ManualScoreCorrections {
   return {
@@ -13,6 +17,8 @@ export function emptyManualCorrections(): ManualScoreCorrections {
     measureNumberAnchor: null,
     boundaryFlags: [],
     measurePartEdits: [],
+    staffIdentity: [],
+    tieEdits: [],
   };
 }
 
@@ -34,6 +40,8 @@ export function normalizeManualCorrections(raw: unknown): ManualScoreCorrections
         : null,
     boundaryFlags: Array.isArray(candidate.boundaryFlags) ? candidate.boundaryFlags : [],
     measurePartEdits: Array.isArray(candidate.measurePartEdits) ? candidate.measurePartEdits : [],
+    staffIdentity: Array.isArray(candidate.staffIdentity) ? candidate.staffIdentity : [],
+    tieEdits: Array.isArray(candidate.tieEdits) ? candidate.tieEdits : [],
   };
 }
 
@@ -43,9 +51,13 @@ export function applyManualCorrections(
 ): ParsedScore {
   const next = cloneScore(baseScore);
   applyPartAssignments(next, corrections.partAssignments);
+  applyTieEdits(next, corrections.tieEdits);
   applyMeasureNumberAnchor(next, corrections.measureNumberAnchor);
   for (const edit of corrections.measurePartEdits) {
     applyMeasurePartEdit(next, edit);
+  }
+  if (featureFlags.sharedStaffVoices) {
+    ensureDirectorSharedParts(next, corrections.staffIdentity);
   }
   next.notes.sort((a, b) => a.startBeat - b.startBeat);
   populatePartRanges(next.parts, next.notes);
@@ -70,6 +82,32 @@ export function upsertMeasurePartEdit(
     next.measurePartEdits.push(edit);
   }
   return next;
+}
+
+export function applyTieEdits(score: ParsedScore, edits: TieEdit[]) {
+  if (!edits.length || !score.notationNotes?.length) {
+    return;
+  }
+  const notation = score.notationNotes.map((note) => ({ ...note }));
+  for (const edit of edits) {
+    const note = notation.find(
+      (candidate) =>
+        candidate.sourcePartId === edit.sourcePartId &&
+        candidate.voice === edit.voice &&
+        candidate.staff === edit.staff &&
+        candidate.midi === edit.midi &&
+        Math.abs(candidate.startBeat - edit.startBeat) < 0.02
+    );
+    if (!note) {
+      continue;
+    }
+    note.tieStart = edit.tieStart;
+    note.tieStop = edit.tieStop;
+  }
+  score.notationNotes = notation;
+  const previousNotes = score.notes.map((note) => ({ ...note, unisonPartIds: note.unisonPartIds ? [...note.unisonPartIds] : undefined }));
+  score.notes = playbackNotesFromNotation(notation, score.parts);
+  restoreUnisonMembership(previousNotes, score.notes);
 }
 
 export function applyPartAssignments(
@@ -172,6 +210,8 @@ function cloneScore(score: ParsedScore): ParsedScore {
     rehearsalMarks: { ...score.rehearsalMarks },
     keyRegions: score.keyRegions?.map((region) => ({ ...region })),
     performanceRoute: score.performanceRoute ? [...score.performanceRoute] : undefined,
+    tempoRegions: score.tempoRegions?.map((region) => ({ ...region })),
+    notationNotes: score.notationNotes?.map((note) => ({ ...note })),
   };
 }
 

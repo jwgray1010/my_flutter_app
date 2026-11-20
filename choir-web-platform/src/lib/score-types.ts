@@ -23,6 +23,8 @@ export interface RecognizedPart {
   /** True when the canonical assignment came from a pitch-based guess
    * rather than an explicit name/label, so the director should confirm it. */
   needsConfirmation: boolean;
+  /** Shared-staff relationship. Absent on a normal one-voice staff. */
+  sharedPlacement?: "independent" | "unison" | "resting" | "ambiguous";
   /** Solo or descant line kept distinct from the choir voicing. */
   isSolo?: boolean;
   /** Lowest/highest MIDI pitch actually sung/played by this voice, and the
@@ -42,6 +44,31 @@ export interface NoteEvent {
   durationBeats: number;
   measureNumber: number;
   velocity: number;
+  /** Other logical parts that sing this same written note. Playback sounds it once. */
+  unisonPartIds?: string[];
+}
+
+/** Written note before tied durations are combined for playback. */
+export interface NotationNote {
+  sourcePartId: string;
+  voice: number;
+  staff: number;
+  midi: number;
+  startBeat: number;
+  durationBeats: number;
+  measureNumber: number;
+  tieStart: boolean;
+  tieStop: boolean;
+}
+
+export interface TieEdit {
+  sourcePartId: string;
+  voice: number;
+  staff: number;
+  midi: number;
+  startBeat: number;
+  tieStart: boolean;
+  tieStop: boolean;
 }
 
 export interface KeyRegion {
@@ -67,8 +94,12 @@ export interface ParsedScore {
   sourceType: "musicxml" | "omr";
   parts: RecognizedPart[];
   notes: NoteEvent[];
+  /** Original written notes, including separate tied noteheads. Playback uses notes. */
+  notationNotes?: NotationNote[];
   measures: MeasureInfo[];
   suggestedTempoBpm: number;
+  /** Written tempo changes in quarter-note beats. The first matches suggestedTempoBpm when present. */
+  tempoRegions?: { startBeat: number; bpm: number }[];
   keySignature: string | null;
   /** Every written key signature, in order. The first matches keySignature. */
   keyRegions?: KeyRegion[];
@@ -127,11 +158,24 @@ export interface MeasurePartEditCorrection {
   updatedAt: string;
 }
 
+/** Director staff-color correction. Display only; it does not rewrite note events. */
+export interface StaffIdentityCorrection {
+  staffId: string;
+  role: string;
+  scope: "system" | "layout" | "matching";
+  systemId: string | null;
+  layoutKey: string | null;
+  customColor: string | null;
+  customLabel: string | null;
+}
+
 export interface ManualScoreCorrections {
   partAssignments: Record<string, AssignablePartId>;
   measureNumberAnchor: MeasureNumberAnchorCorrection | null;
   boundaryFlags: MeasureBoundaryFlag[];
   measurePartEdits: MeasurePartEditCorrection[];
+  staffIdentity: StaffIdentityCorrection[];
+  tieEdits: TieEdit[];
 }
 
 export interface SavedScoreSummary {

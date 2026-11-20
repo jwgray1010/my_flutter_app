@@ -11,7 +11,7 @@ import {
   normalizeManualCorrections,
   upsertMeasurePartEdit,
 } from "@/lib/score-corrections";
-import type { AssignablePartId, MeasurePartEditEvent } from "@/lib/score-types";
+import type { AssignablePartId, MeasurePartEditEvent, StaffIdentityCorrection, TieEdit } from "@/lib/score-types";
 
 export const runtime = "nodejs";
 
@@ -65,6 +65,15 @@ export async function PATCH(
         partId: string;
         measureInternalIndex: number;
         events: MeasurePartEditEvent[];
+      }
+    | {
+        action: "updateStaffIdentity";
+        correction: StaffIdentityCorrection;
+        assignments?: Record<string, AssignablePartId>;
+      }
+    | {
+        action: "updateTieEdits";
+        tieEdits: TieEdit[];
       };
 
   if (body.action === "rename") {
@@ -108,6 +117,27 @@ export async function PATCH(
           createdAt: new Date().toISOString(),
         },
       ];
+    }
+
+    if (body.action === "updateStaffIdentity") {
+      const correction = body.correction;
+      if (!correction?.staffId || !correction.role) {
+        return NextResponse.json({ message: "Staff correction is incomplete." }, { status: 400 });
+      }
+      corrections.staffIdentity = [
+        ...corrections.staffIdentity.filter((item) => item.staffId !== correction.staffId),
+        correction,
+      ];
+      if (body.assignments) {
+        corrections.partAssignments = {
+          ...corrections.partAssignments,
+          ...body.assignments,
+        };
+      }
+    }
+
+    if (body.action === "updateTieEdits") {
+      corrections.tieEdits = Array.isArray(body.tieEdits) ? body.tieEdits : [];
     }
 
     if (body.action === "saveMeasurePartEvents") {
